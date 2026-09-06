@@ -26,6 +26,8 @@ Mirrored wardrobe sliders and the shower glass carry glossy planar reflections (
 
 A procedural skeleton (three.js primitives, no assets) waits inside the closets. There is one instance: it moves, while the leaf is still shut, to whichever closet door the walker opens: the three mirrored robe sliders, the upper and ground linen doors and the pantry. The same skeleton moves to the bathtub, in a bathing pose, when the bathroom door is opened, and appears as a skull, a hand and loose bones on the shelves when the vanity mirror cabinet is opened. It exists in one place only: each opening empties the others.
 
+Around the house an 11 x 11 grid of low-detail house clones fills the neighbourhood, ours in the centre cell: instanced shells with no interior, lit window panes on the near ring only, bare blocks farther out. They do not collide, cast shadows or reflect.
+
 The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and slides along walls.
 
 ## Performance switches

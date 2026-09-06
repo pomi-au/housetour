@@ -19,6 +19,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -614,6 +615,64 @@ float roomMask(int i, vec3 vRoomPos) {
     renderer.shadowMap.needsUpdate = true; for (const s of built.spots) if (s.castShadow) s.shadow.needsUpdate = true; built.sun.shadow.needsUpdate = true; sceneDirty = 3;
   }
 
+  // Neighbourhood: an 11 x 11 grid of house clones around ours (ours in the centre cell), seen through the windows
+  // and from outside. Two instanced draws: a shell (two-storey block, garage, parapet) with no interior, and lit
+  // window panes on the near ring only. The outer rings are bare blocks. Nothing here collides, casts or reflects.
+  const NEIGHBOUR_GRID = 11, NEIGHBOUR_NEAR = 2;
+  function buildNeighbourhood(root) {
+    const W = R.PARAMS.PLAN_W ?? 12.47, D = R.PARAMS.PLAN_D ?? 7.55, H = 5.2;   // our footprint, in metres
+    const groundY = R.PARAMS.GROUND_FLOOR_DATUM - 0.05;
+    const shell = new THREE.BoxGeometry(W, H, D); shell.translate(0, H / 2, 0);
+    const garage = new THREE.BoxGeometry(6.2, 3.1, 6.6); garage.translate(-W / 2 - 3.0, 1.55, 0.6);
+    const parapet = new THREE.BoxGeometry(W + 0.3, 0.25, D + 0.3); parapet.translate(0, H + 0.12, 0);
+    const houseGeo = mergeGeometries([shell, garage, parapet]);
+    const sx = 21, sz = 17;
+    const seedRnd = (i, j) => { const v = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return v - Math.floor(v); };
+    const cells = [];
+    for (let i = 0; i < NEIGHBOUR_GRID; i++) for (let j = 0; j < NEIGHBOUR_GRID; j++) {
+      const ci = i - (NEIGHBOUR_GRID - 1) / 2, cj = j - (NEIGHBOUR_GRID - 1) / 2;
+      if (ci === 0 && cj === 0) continue;                     // our house
+      const ring = Math.max(Math.abs(ci), Math.abs(cj));
+      const flip = seedRnd(i, j) > 0.5 ? Math.PI : 0;        // half of them face the other way
+      cells.push({ x: ci * sx + (seedRnd(i + 7, j) - 0.5) * 1.5, z: cj * sz + (seedRnd(i, j + 7) - 0.5) * 1.5, yaw: flip, ring, tint: seedRnd(i + 3, j + 3) });
+    }
+    const houses = new THREE.InstancedMesh(houseGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), cells.length);
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    cells.forEach((cell, k) => {
+      m.makeRotationY(cell.yaw); m.setPosition(cell.x, groundY, cell.z);
+      houses.setMatrixAt(k, m);
+      const t = 0.82 + cell.tint * 0.14;                      // render beige, a little variation per house
+      houses.setColorAt(k, c.setRGB(t, t * 0.97, t * 0.92));
+    });
+    houses.castShadow = false; houses.receiveShadow = false; houses.frustumCulled = false;
+    houses.raycast = () => {};
+    root.add(houses);
+    // Windows on the near ring: two rows on the long faces, one pane per row on the short faces.
+    const pane = new THREE.PlaneGeometry(1.6, 1.15);
+    const panes = [];
+    for (const cell of cells) {
+      if (cell.ring > NEIGHBOUR_NEAR) continue;
+      const rot = new THREE.Matrix4().makeRotationY(cell.yaw);
+      const place = (lx, ly, lz, ry) => {
+        const local = new THREE.Matrix4().makeRotationY(ry); local.setPosition(lx, ly, lz);
+        const world = new THREE.Matrix4().multiplyMatrices(rot, local); const p = new THREE.Vector3().setFromMatrixPosition(world);
+        world.setPosition(p.x + cell.x, p.y + groundY, p.z + cell.z);
+        panes.push(world);
+      };
+      for (const row of [1.4, 3.9]) {
+        for (let n = 0; n < 4; n++) { const x = -W / 2 + 1.8 + n * (W - 3.6) / 3; place(x, row, D / 2 + 0.02, 0); place(x, row, -D / 2 - 0.02, Math.PI); }
+        place(W / 2 + 0.02, row, 0, Math.PI / 2); place(-W / 2 - 0.02, row, -2.2, -Math.PI / 2);
+      }
+    }
+    const windows = new THREE.InstancedMesh(pane, new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false }), Math.max(1, panes.length));
+    panes.forEach((mat, k) => windows.setMatrixAt(k, mat));
+    windows.count = panes.length;
+    windows.castShadow = false; windows.receiveShadow = false; windows.frustumCulled = false;
+    windows.raycast = () => {};
+    root.add(windows);
+    return { houses, windows };
+  }
+
   function buildWalkScene() {
     for (const led of R.ceilingLEDs) led.walkWorld = [led.world[0], walkY(led.state.level, led.world[1]), led.world[2]];
     if (built) disposeBuilt();
@@ -1194,9 +1253,11 @@ float roomMask(int i, vec3 vRoomPos) {
       }
     }
 
+    const neighbourhood = buildNeighbourhood(root);
+
     scene.add(root);
     culledLevel = null;
-    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, cabinetBones, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, cabinetBones, neighbourhood, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
     buildDirty = false;
     console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1000)}k triangles, ${leds.length} downlights`);
   }
@@ -1589,6 +1650,8 @@ float roomMask(int i, vec3 vRoomPos) {
     built.clock.userData.hourHand.rotation.z = -((h % 12) / 12) * Math.PI * 2;
     built.clock.userData.minuteHand.rotation.z = -((h % 1)) * Math.PI * 2;
     built.daylight = daylight;
+    // Neighbours' windows: dark glass by day, warm lit panes at night.
+    if (built.neighbourhood) built.neighbourhood.windows.material.color.setRGB(0.30 + 0.70 * (1 - daylight), 0.36 + 0.44 * (1 - daylight), 0.46 + 0.10 * (1 - daylight));
     const { sun, sky, moon, hemi, houseCenter } = built;
     const sunUp = sunElev > -0.02;
     const light = sunUp ? sunDir : moonDir;
