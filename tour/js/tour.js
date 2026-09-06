@@ -1128,10 +1128,15 @@ float roomMask(int i, vec3 vRoomPos) {
     pendingCloset = null;
     root.add(skeleton);
     // Vanity mirror cabinet: a skull in the right bay of the lower shelf, a hand in the left bay and loose bones
-    // on the upper shelf. Everything is scaled to the shelf depth so the closed doors clear it.
+    // on the upper shelf. Everything is scaled to the shelf depth so the closed doors clear it. This is the third
+    // place the one skeleton can be: it appears here when the cabinet doors are opened.
+    const cabinetBones = new THREE.Group();
+    cabinetBones.visible = false;
+    root.add(cabinetBones);
     {
       const shelf1 = R.meshes.find(m => m.name === 'T18-VANITY-moonlight-adjustable-glass-shelf-1');
       const shelf2 = R.meshes.find(m => m.name === 'T18-VANITY-moonlight-adjustable-glass-shelf-2');
+      cabinetBones.userData.doors = R.bathroomInteractions.find(st => st.id === 'T18-VANITY-MOONLIGHT-DOORS') || null;
       if (shelf1 && shelf2) {
         const [lo, hi] = shelf1.shadowBounds;
         const bone = boneMaterial();
@@ -1143,7 +1148,7 @@ float roomMask(int i, vec3 vRoomPos) {
         skull.scale.setScalar(k);
         skull.position.set(x, y1 + 0.105 * k, zR);
         skull.rotation.y = -Math.PI / 2;   // face toward -x, out of the cabinet
-        root.add(skull);
+        cabinetBones.add(skull);
         // A hand lying palm down in the left bay, fingers toward the doors.
         const hand = new THREE.Group();
         const palm = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.055), bone); palm.castShadow = true; hand.add(palm);
@@ -1154,7 +1159,7 @@ float roomMask(int i, vec3 vRoomPos) {
         const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0035, 0.04, 6), bone);
         thumb.rotation.z = Math.PI / 2; thumb.rotation.y = 0.6; thumb.position.set(-0.03, 0, 0.035); thumb.castShadow = true; hand.add(thumb);
         hand.scale.setScalar(k); hand.position.set(x + 0.01, y1 + 0.006 * k, zL);
-        root.add(hand);
+        cabinetBones.add(hand);
         // Two long bones and a rib on the upper shelf, lying along the shelf.
         const longBone = (len, r) => {
           const g = new THREE.Group();
@@ -1163,10 +1168,10 @@ float roomMask(int i, vec3 vRoomPos) {
           g.traverse(o => { o.castShadow = true; });
           return g;
         };
-        const femur = longBone(0.34, 0.012); femur.position.set(x - 0.02, y2 + 0.022, zL + 0.02); femur.rotation.y = 0.08; root.add(femur);
-        const ulna = longBone(0.24, 0.008); ulna.position.set(x + 0.025, y2 + 0.015, zR - 0.05); ulna.rotation.y = -0.12; root.add(ulna);
+        const femur = longBone(0.34, 0.012); femur.position.set(x - 0.02, y2 + 0.022, zL + 0.02); femur.rotation.y = 0.08; cabinetBones.add(femur);
+        const ulna = longBone(0.24, 0.008); ulna.position.set(x + 0.025, y2 + 0.015, zR - 0.05); ulna.rotation.y = -0.12; cabinetBones.add(ulna);
         const rib = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.006, 6, 20, Math.PI * 1.1), bone);
-        rib.rotation.x = Math.PI / 2; rib.rotation.z = 0.4; rib.position.set(x, y2 + 0.006, zR + 0.12); rib.castShadow = true; root.add(rib);
+        rib.rotation.x = Math.PI / 2; rib.rotation.z = 0.4; rib.position.set(x, y2 + 0.006, zR + 0.12); rib.castShadow = true; cabinetBones.add(rib);
       }
     }
 
@@ -1191,7 +1196,7 @@ float roomMask(int i, vec3 vRoomPos) {
 
     scene.add(root);
     culledLevel = null;
-    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, cabinetBones, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
     buildDirty = false;
     console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1000)}k triangles, ${leds.length} downlights`);
   }
@@ -1488,6 +1493,14 @@ float roomMask(int i, vec3 vRoomPos) {
   }
 
   let pendingCloset = null;
+  // The one skeleton shows in exactly one place: a closet (standing), the bathtub (bathing) or the vanity cabinet (bones).
+  function showSkeletonAt(where) {
+    if (!built) return;
+    built.skeleton.visible = where === 'closet';
+    if (built.tubSkeleton) built.tubSkeleton.visible = where === 'tub';
+    if (built.cabinetBones) built.cabinetBones.visible = where === 'cabinet';
+    if (where !== 'closet') pendingCloset = null;
+  }
   function placeSkeletonBehindMovingLeaf() {
     if (!pendingCloset || !built) return;
     const { spot } = pendingCloset;
@@ -1507,23 +1520,26 @@ float roomMask(int i, vec3 vRoomPos) {
       // slider the leaf that moves is found on its first frame of motion (see placeSkeletonBehindMovingLeaf).
       // One skeleton in the house: opening the bathroom door puts it in the tub (bathing pose) and empties the
       // closets; opening a closet stands it behind that door and empties the tub.
-      if (opening && built?.tubSkeleton && s === built.tubSkeleton.userData.door) {
-        built.tubSkeleton.visible = true; built.skeleton.visible = false; pendingCloset = null;
-      }
+      if (opening && built?.tubSkeleton && s === built.tubSkeleton.userData.door) showSkeletonAt('tub');
       const spot = opening && built?.closetSpots?.get(s.id);
       if (spot) {
-        if (built.tubSkeleton) built.tubSkeleton.visible = false;
-        built.skeleton.rotation.y = spot.yaw; built.skeleton.visible = true;
+        showSkeletonAt('closet');
+        built.skeleton.rotation.y = spot.yaw;
         if (spot.leaves.length === 1) { built.skeleton.position.copy(spot.leaves[0].pos); pendingCloset = null; }
         else pendingCloset = { state: s, spot, deadline: performance.now() + 4000 };
       }
     } else if (action.kind === 'light' || action.control) {
       const state = action.state || action.control?.state;
       if (!state) return;
+      const opensCabinet = built?.cabinetBones && state === built.cabinetBones.userData.doors && state.target < 0.5;
       if ('illumination' in state) R.commandBathroomInteraction?.(state);
+      if (opensCabinet) showSkeletonAt('cabinet');
       else R.commandRoomLight(state, !state.active, { announce: false });
     } else if (action.kind === 'bathroom' && action.state) {
-      R.commandBathroomInteraction?.(action.state);
+      const st = action.state;
+      const opensCabinet = built?.cabinetBones && st === built.cabinetBones.userData.doors && st.target < 0.5;
+      R.commandBathroomInteraction?.(st);
+      if (opensCabinet) showSkeletonAt('cabinet');
     }
   }
 

@@ -38509,9 +38509,13 @@ float roomMask(int i, vec3 vRoomPos) {
       }
       pendingCloset = null;
       root.add(skeleton);
+      const cabinetBones = new Group();
+      cabinetBones.visible = false;
+      root.add(cabinetBones);
       {
         const shelf1 = R.meshes.find((m) => m.name === "T18-VANITY-moonlight-adjustable-glass-shelf-1");
         const shelf2 = R.meshes.find((m) => m.name === "T18-VANITY-moonlight-adjustable-glass-shelf-2");
+        cabinetBones.userData.doors = R.bathroomInteractions.find((st) => st.id === "T18-VANITY-MOONLIGHT-DOORS") || null;
         if (shelf1 && shelf2) {
           const [lo, hi] = shelf1.shadowBounds;
           const bone = boneMaterial();
@@ -38523,7 +38527,7 @@ float roomMask(int i, vec3 vRoomPos) {
           skull.scale.setScalar(k);
           skull.position.set(x, y1 + 0.105 * k, zR);
           skull.rotation.y = -Math.PI / 2;
-          root.add(skull);
+          cabinetBones.add(skull);
           const hand = new Group();
           const palm = new Mesh(new BoxGeometry(0.05, 0.012, 0.055), bone);
           palm.castShadow = true;
@@ -38543,7 +38547,7 @@ float roomMask(int i, vec3 vRoomPos) {
           hand.add(thumb);
           hand.scale.setScalar(k);
           hand.position.set(x + 0.01, y1 + 6e-3 * k, zL);
-          root.add(hand);
+          cabinetBones.add(hand);
           const longBone = (len, r) => {
             const g = new Group();
             const shaft = new Mesh(new CylinderGeometry(r, r, len, 8), bone);
@@ -38562,17 +38566,17 @@ float roomMask(int i, vec3 vRoomPos) {
           const femur = longBone(0.34, 0.012);
           femur.position.set(x - 0.02, y2 + 0.022, zL + 0.02);
           femur.rotation.y = 0.08;
-          root.add(femur);
+          cabinetBones.add(femur);
           const ulna = longBone(0.24, 8e-3);
           ulna.position.set(x + 0.025, y2 + 0.015, zR - 0.05);
           ulna.rotation.y = -0.12;
-          root.add(ulna);
+          cabinetBones.add(ulna);
           const rib = new Mesh(new TorusGeometry(0.06, 6e-3, 6, 20, Math.PI * 1.1), bone);
           rib.rotation.x = Math.PI / 2;
           rib.rotation.z = 0.4;
           rib.position.set(x, y2 + 6e-3, zR + 0.12);
           rib.castShadow = true;
-          root.add(rib);
+          cabinetBones.add(rib);
         }
       }
       let tubSkeleton = null;
@@ -38593,7 +38597,7 @@ float roomMask(int i, vec3 vRoomPos) {
       }
       scene.add(root);
       culledLevel = null;
-      built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+      built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, cabinetBones, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
       buildDirty = false;
       console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1e3)}k triangles, ${leds.length} downlights`);
     }
@@ -38926,6 +38930,13 @@ float roomMask(int i, vec3 vRoomPos) {
       renderer.autoClear = prevAuto;
     }
     let pendingCloset = null;
+    function showSkeletonAt(where) {
+      if (!built) return;
+      built.skeleton.visible = where === "closet";
+      if (built.tubSkeleton) built.tubSkeleton.visible = where === "tub";
+      if (built.cabinetBones) built.cabinetBones.visible = where === "cabinet";
+      if (where !== "closet") pendingCloset = null;
+    }
     function placeSkeletonBehindMovingLeaf() {
       if (!pendingCloset || !built) return;
       const { spot } = pendingCloset;
@@ -38945,16 +38956,11 @@ float roomMask(int i, vec3 vRoomPos) {
         const s = action.state;
         const opening = s.target < 0.5;
         R.commandOpening(s, opening, { announce: false });
-        if (opening && built?.tubSkeleton && s === built.tubSkeleton.userData.door) {
-          built.tubSkeleton.visible = true;
-          built.skeleton.visible = false;
-          pendingCloset = null;
-        }
+        if (opening && built?.tubSkeleton && s === built.tubSkeleton.userData.door) showSkeletonAt("tub");
         const spot = opening && built?.closetSpots?.get(s.id);
         if (spot) {
-          if (built.tubSkeleton) built.tubSkeleton.visible = false;
+          showSkeletonAt("closet");
           built.skeleton.rotation.y = spot.yaw;
-          built.skeleton.visible = true;
           if (spot.leaves.length === 1) {
             built.skeleton.position.copy(spot.leaves[0].pos);
             pendingCloset = null;
@@ -38963,10 +38969,15 @@ float roomMask(int i, vec3 vRoomPos) {
       } else if (action.kind === "light" || action.control) {
         const state = action.state || action.control?.state;
         if (!state) return;
+        const opensCabinet = built?.cabinetBones && state === built.cabinetBones.userData.doors && state.target < 0.5;
         if ("illumination" in state) R.commandBathroomInteraction?.(state);
+        if (opensCabinet) showSkeletonAt("cabinet");
         else R.commandRoomLight(state, !state.active, { announce: false });
       } else if (action.kind === "bathroom" && action.state) {
-        R.commandBathroomInteraction?.(action.state);
+        const st = action.state;
+        const opensCabinet = built?.cabinetBones && st === built.cabinetBones.userData.doors && st.target < 0.5;
+        R.commandBathroomInteraction?.(st);
+        if (opensCabinet) showSkeletonAt("cabinet");
       }
     }
     function describe(action) {
