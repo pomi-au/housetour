@@ -36332,6 +36332,10 @@ void main() {
           roomLights.push({ x: px2, y: py2, boxes: q === r.rects[0] ? [grown(q), r.rects[1] ? grown(r.rects[1]) : null].filter(Boolean) : [grown(q), grown(r.rects[0])] });
         }
       }
+      if (!roomLights.length && r.rects.length) {
+        const q = r.rects[0];
+        roomLights.push({ x: (q.x0 + q.x1) / 2, y: (q.y0 + q.y1) / 2, boxes: [grown(q), r.rects[1] ? grown(r.rects[1]) : null].filter(Boolean) });
+      }
       for (const l of roomLights) {
         const [i, j] = toCell(l.x, l.y);
         const z = r.raked ? Math.min(roofZ[idx(i, j)] - 0.15, 4) : r.ceiling;
@@ -36477,9 +36481,9 @@ float roomMask(int i, vec3 vRoomPos) {
     const data = new Float32Array(w * h * 4);
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
       const e = fill2(i, j), k = (j * w + i) * 4;
-      data[k] = e;
-      data[k + 1] = e * 0.9;
-      data[k + 2] = e * 0.76;
+      data[k] = e[0];
+      data[k + 1] = e[1];
+      data[k + 2] = e[2];
       data[k + 3] = 1;
     }
     const t = new DataTexture(data, w, h, RGBAFormat, FloatType);
@@ -36491,49 +36495,140 @@ float roomMask(int i, vec3 vRoomPos) {
     t.needsUpdate = true;
     return t;
   }
-  function bakeLightMaps(meshes, leds, { power = 9, halo = 0.15, floorScale = 0.6, wallScale = 1, texel = 0.04, wallTexel = 0.06, extraMeshes = [] } = {}) {
-    const box2 = new Box3();
-    for (const m of meshes) if (m.userData.category === "slab" || m.userData.category === "ceiling") box2.expandByObject(m);
-    const x0 = box2.min.x - 0.2, z0 = box2.min.z - 0.2, W = box2.max.x - box2.min.x + 0.4, D = box2.max.z - box2.min.z + 0.4;
-    const w = Math.min(2048, Math.ceil(W / texel)), h = Math.min(2048, Math.ceil(D / texel));
-    const planMap = (y, ny, scale) => {
-      const t = floatTexture(w, h, (i, j) => irradianceAt(x0 + (i + 0.5) * W / w, y, z0 + (j + 0.5) * D / h, 0, ny, 0, leds, power, halo, scale));
-      t.repeat.set(1 / W, 1 / D);
-      t.offset.set(-x0 / W, -z0 / D);
-      return t;
+  var WARM = [1, 0.9, 0.76];
+  function bakeLightMaps(meshes, leds, { power = 9, halo = 0.15, floorScale = 0.6, wallScale = 1, texel = 0.04, wallTexel = 0.06, extraMeshes = [], bounces = 3, patch = 0.8, wallPatch = 1, receiver = 0.25 } = {}) {
+    const roomOf = (x, y, z) => {
+      for (const l of leds) if (y >= l.yLo && y <= l.yHi && l.boxes.some((b) => x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3])) return l.roomIndex ?? 0;
+      return -1;
     };
-    const maps = /* @__PURE__ */ new Map();
-    const swapped = [];
+    const albedoOf = (m) => {
+      const mat = m.material, c = mat.color || new Color(0.8, 0.8, 0.8), k = (1 - (mat.metalness || 0)) * (mat.map ? 0.97 : 1);
+      return [c.r * k, c.g * k, c.b * k];
+    };
+    const surfaces = [];
+    const box2 = new Box3();
     for (const m of meshes) {
       const cat = m.userData.category;
-      let tex = null;
-      if (cat === "slab") {
-        m.geometry.computeBoundingBox();
-        tex = planMap(m.geometry.boundingBox.max.y, 1, floorScale);
-      } else if (cat === "ceiling") {
-        m.geometry.computeBoundingBox();
-        tex = planMap(m.geometry.boundingBox.min.y, -1, wallScale);
-      } else if (cat === "wall") {
-        m.geometry.computeBoundingBox();
-        const b = m.geometry.boundingBox, alongX = b.max.x - b.min.x >= b.max.z - b.min.z;
-        const a0 = alongX ? b.min.x : b.min.z, len = alongX ? b.max.x - b.min.x : b.max.z - b.min.z, y0 = b.min.y, hgt = b.max.y - b.min.y;
+      if (cat !== "slab" && cat !== "ceiling" && cat !== "wall") continue;
+      m.geometry.computeBoundingBox();
+      const b = m.geometry.boundingBox;
+      if (cat === "slab" || cat === "ceiling") {
+        surfaces.push({ mesh: m, kind: "plan", x0: b.min.x, z0: b.min.z, W: b.max.x - b.min.x, D: b.max.z - b.min.z, y: cat === "slab" ? b.max.y : b.min.y, ny: cat === "slab" ? 1 : -1, scale: cat === "slab" ? floorScale : wallScale, albedo: albedoOf(m) });
+      } else {
+        const alongX = b.max.x - b.min.x >= b.max.z - b.min.z;
+        const len = alongX ? b.max.x - b.min.x : b.max.z - b.min.z, hgt = b.max.y - b.min.y;
         if (len < 0.05 || hgt < 0.05) continue;
-        const tw = Math.max(2, Math.ceil(len / wallTexel)), th = Math.max(2, Math.ceil(hgt / wallTexel));
-        const across = alongX ? (b.min.z + b.max.z) / 2 : (b.min.x + b.max.x) / 2, half = (alongX ? b.max.z - b.min.z : b.max.x - b.min.x) / 2 + 0.01;
-        tex = floatTexture(tw, th, (i, j) => {
-          const a = a0 + (i + 0.5) * len / tw, y = y0 + (j + 0.5) * hgt / th;
-          let best = 0;
-          for (const s of [-1, 1]) {
-            const px2 = alongX ? a : across + s * half, pz2 = alongX ? across + s * half : a;
-            const nx = alongX ? 0 : s, nz = alongX ? s : 0;
-            best = Math.max(best, irradianceAt(px2, y, pz2, nx, 0, nz, leds, power, halo, wallScale));
-          }
-          return best;
-        });
-        tex.repeat.set(1 / len, 1 / hgt);
-        tex.offset.set(-a0 / len, -y0 / hgt);
+        surfaces.push({ mesh: m, kind: "wall", alongX, a0: alongX ? b.min.x : b.min.z, len, y0: b.min.y, hgt, across: alongX ? (b.min.z + b.max.z) / 2 : (b.min.x + b.max.x) / 2, half: (alongX ? b.max.z - b.min.z : b.max.x - b.min.x) / 2 + 0.01, scale: wallScale, albedo: albedoOf(m) });
       }
-      if (tex) maps.set(m, tex);
+    }
+    const wallPoint = (sf, a, y, s) => sf.alongX ? [a, y, sf.across + s * sf.half, 0, 0, s] : [sf.across + s * sf.half, y, a, s, 0, 0];
+    const P = [];
+    for (const sf of surfaces) {
+      if (sf.kind === "plan") {
+        const nx = Math.max(1, Math.round(sf.W / patch)), nz = Math.max(1, Math.round(sf.D / patch)), area2 = sf.W / nx * (sf.D / nz);
+        for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+          const x = sf.x0 + (i + 0.5) * sf.W / nx, z = sf.z0 + (j + 0.5) * sf.D / nz;
+          P.push({ x, y: sf.y, z, nx: 0, ny: sf.ny, nz: 0, area: area2, room: roomOf(x, sf.y + sf.ny * 0.05, z), albedo: sf.albedo, scale: sf.scale });
+        }
+      } else {
+        const na = Math.max(1, Math.round(sf.len / wallPatch)), nh = Math.max(1, Math.round(sf.hgt / wallPatch)), area2 = sf.len / na * (sf.hgt / nh);
+        for (let s = -1; s <= 1; s += 2) for (let j = 0; j < nh; j++) for (let i = 0; i < na; i++) {
+          const [x, y, z, nx, ny, nz] = wallPoint(sf, sf.a0 + (i + 0.5) * sf.len / na, sf.y0 + (j + 0.5) * sf.hgt / nh, s);
+          P.push({ x, y, z, nx, ny, nz, area: area2, room: roomOf(x + nx * 0.05, y, z + nz * 0.05), albedo: sf.albedo, scale: sf.scale });
+        }
+      }
+    }
+    for (const p of P) {
+      const e = p.room < 0 ? 0 : irradianceAt(p.x, p.y, p.z, p.nx, p.ny, p.nz, leds, power, halo, p.scale);
+      p.E = [e * WARM[0], e * WARM[1], e * WARM[2]];
+      p.B = [p.E[0] * p.albedo[0], p.E[1] * p.albedo[1], p.E[2] * p.albedo[2]];
+      p.ind = [0, 0, 0];
+    }
+    const emitters = P.filter((p) => p.room >= 0);
+    const gather = (x, y, z, nx, ny, nz, room, out) => {
+      out[0] = out[1] = out[2] = 0;
+      if (room < 0) return out;
+      for (const q of emitters) {
+        if (q.room !== room) continue;
+        const dx = q.x - x, dy = q.y - y, dz = q.z - z, r2 = dx * dx + dy * dy + dz * dz;
+        if (r2 < 1e-4) continue;
+        const cosI = dx * nx + dy * ny + dz * nz, cosJ = -(dx * q.nx + dy * q.ny + dz * q.nz);
+        if (cosI <= 0 || cosJ <= 0) continue;
+        const ff = cosI * cosJ / r2 * q.area / (Math.PI * r2 + q.area);
+        out[0] += q.B[0] * ff;
+        out[1] += q.B[1] * ff;
+        out[2] += q.B[2] * ff;
+      }
+      return out;
+    };
+    const tmp2 = [0, 0, 0];
+    for (let k = 0; k < bounces; k++) {
+      const next = emitters.map((p) => {
+        gather(p.x, p.y, p.z, p.nx, p.ny, p.nz, p.room, tmp2);
+        return [tmp2[0], tmp2[1], tmp2[2]];
+      });
+      emitters.forEach((p, n) => {
+        p.ind[0] += next[n][0];
+        p.ind[1] += next[n][1];
+        p.ind[2] += next[n][2];
+        p.B = [next[n][0] * p.albedo[0], next[n][1] * p.albedo[1], next[n][2] * p.albedo[2]];
+      });
+    }
+    for (const p of emitters) p.B = [(p.E[0] + p.ind[0]) * p.albedo[0], (p.E[1] + p.ind[1]) * p.albedo[1], (p.E[2] + p.ind[2]) * p.albedo[2]];
+    const bilinear = (grid, nx, ny, u, v) => {
+      const x = Math.min(nx - 1, Math.max(0, u - 0.5)), y = Math.min(ny - 1, Math.max(0, v - 0.5));
+      const i0 = Math.floor(x), j0 = Math.floor(y), i1 = Math.min(nx - 1, i0 + 1), j1 = Math.min(ny - 1, j0 + 1), fx = x - i0, fy = y - j0;
+      const at = (i, j, c) => grid[(j * nx + i) * 3 + c];
+      return [0, 1, 2].map((c) => (at(i0, j0, c) * (1 - fx) + at(i1, j0, c) * fx) * (1 - fy) + (at(i0, j1, c) * (1 - fx) + at(i1, j1, c) * fx) * fy);
+    };
+    const maps = /* @__PURE__ */ new Map();
+    for (const sf of surfaces) {
+      let tex;
+      if (sf.kind === "plan") {
+        const w = Math.min(2048, Math.ceil(sf.W / texel)), h = Math.min(2048, Math.ceil(sf.D / texel));
+        const rx = Math.max(2, Math.round(sf.W / receiver)), rz = Math.max(2, Math.round(sf.D / receiver));
+        const grid = new Float32Array(rx * rz * 3);
+        for (let j = 0; j < rz; j++) for (let i = 0; i < rx; i++) {
+          const x = sf.x0 + (i + 0.5) * sf.W / rx, z = sf.z0 + (j + 0.5) * sf.D / rz;
+          gather(x, sf.y, z, 0, sf.ny, 0, roomOf(x, sf.y + sf.ny * 0.05, z), tmp2);
+          grid.set(tmp2, (j * rx + i) * 3);
+        }
+        tex = floatTexture(w, h, (i, j) => {
+          const x = sf.x0 + (i + 0.5) * sf.W / w, z = sf.z0 + (j + 0.5) * sf.D / h;
+          const e = irradianceAt(x, sf.y, z, 0, sf.ny, 0, leds, power, halo, sf.scale);
+          const b = bilinear(grid, rx, rz, (i + 0.5) * rx / w, (j + 0.5) * rz / h);
+          return [e * WARM[0] + b[0], e * WARM[1] + b[1], e * WARM[2] + b[2]];
+        });
+        tex.repeat.set(1 / sf.W, 1 / sf.D);
+        tex.offset.set(-sf.x0 / sf.W, -sf.z0 / sf.D);
+      } else {
+        const tw = Math.max(2, Math.ceil(sf.len / wallTexel)), th = Math.max(2, Math.ceil(sf.hgt / wallTexel));
+        const ra = Math.max(2, Math.round(sf.len / receiver)), rh = Math.max(2, Math.round(sf.hgt / receiver));
+        const grid = new Float32Array(ra * rh * 3);
+        for (let j = 0; j < rh; j++) for (let i = 0; i < ra; i++) {
+          const a = sf.a0 + (i + 0.5) * sf.len / ra, y = sf.y0 + (j + 0.5) * sf.hgt / rh;
+          let best = [0, 0, 0];
+          for (const s of [-1, 1]) {
+            const [x, yy, z, nx, ny, nz] = wallPoint(sf, a, y, s);
+            gather(x, yy, z, nx, ny, nz, roomOf(x + nx * 0.05, yy, z + nz * 0.05), tmp2);
+            if (tmp2[0] + tmp2[1] + tmp2[2] > best[0] + best[1] + best[2]) best = [tmp2[0], tmp2[1], tmp2[2]];
+          }
+          grid.set(best, (j * ra + i) * 3);
+        }
+        tex = floatTexture(tw, th, (i, j) => {
+          const a = sf.a0 + (i + 0.5) * sf.len / tw, y = sf.y0 + (j + 0.5) * sf.hgt / th;
+          let e = 0;
+          for (const s of [-1, 1]) {
+            const [x, yy, z, nx, ny, nz] = wallPoint(sf, a, y, s);
+            e = Math.max(e, irradianceAt(x, yy, z, nx, ny, nz, leds, power, halo, sf.scale));
+          }
+          const b = bilinear(grid, ra, rh, (i + 0.5) * ra / tw, (j + 0.5) * rh / th);
+          return [e * WARM[0] + b[0], e * WARM[1] + b[1], e * WARM[2] + b[2]];
+        });
+        tex.repeat.set(1 / sf.len, 1 / sf.hgt);
+        tex.offset.set(-sf.a0 / sf.len, -sf.y0 / sf.hgt);
+      }
+      maps.set(sf.mesh, tex);
     }
     const centre = new Vector3(), bb = new Box3();
     for (const m of extraMeshes) {
@@ -36541,10 +36636,17 @@ float roomMask(int i, vec3 vRoomPos) {
       bb.setFromObject(m);
       if (bb.isEmpty()) continue;
       bb.getCenter(centre);
-      let e = 0;
-      for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) e += irradianceAt(centre.x, centre.y, centre.z, nx, 0, nz, leds, power, halo, wallScale);
-      maps.set(m, floatTexture(1, 1, () => e / 4));
+      const acc = [0, 0, 0];
+      for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const e = irradianceAt(centre.x, centre.y, centre.z, nx, 0, nz, leds, power, halo, wallScale);
+        gather(centre.x, centre.y, centre.z, nx, 0, nz, roomOf(centre.x, centre.y, centre.z), tmp2);
+        acc[0] += (e * WARM[0] + tmp2[0]) / 4;
+        acc[1] += (e * WARM[1] + tmp2[1]) / 4;
+        acc[2] += (e * WARM[2] + tmp2[2]) / 4;
+      }
+      maps.set(m, floatTexture(1, 1, () => acc));
     }
+    const swapped = [];
     const apply = (on) => {
       if (on) {
         for (const [m, tex] of maps) {
@@ -36568,7 +36670,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const setIntensity = (k) => {
       for (const m of maps.keys()) if (m.userData.mappedMaterial) m.userData.mappedMaterial.lightMapIntensity = k;
     };
-    return { maps, apply, setIntensity, bakedPower: power, size: [w, h] };
+    return { maps, apply, setIntensity, bakedPower: power, patches: P.length, emitters: emitters.length };
   }
 
   // ../js/fixtures/common.js
@@ -36846,7 +36948,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const RENDER = { dpr: TOUCH2 ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH2 ? 2 : 3, shadowSize: 512, haloLights: true };
     const SPOT_POOL = RENDER.lights;
     const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1, base: 1, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
-    let mappedLights = false;
+    let mappedLights = true;
     const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
     const TUNE_KEY = "residence.tour.lighting.v1";
     const tune = { ...TUNE_DEFAULTS };
@@ -37134,6 +37236,7 @@ float roomMask(int i, vec3 vRoomPos) {
       const leds = lighting.lights.map((l) => ({
         world: [l.x - frame2.cx, l.z + floorTop, -(l.y - frame2.cy)],
         room: lighting.rooms[l.room],
+        roomIndex: l.room,
         boxes: l.boxes.map((b) => [b[0] - frame2.cx, -(b[3] - frame2.cy), b[2] - frame2.cx, -(b[1] - frame2.cy)]),
         yLo: floorTop - 0.45,
         yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
@@ -37482,7 +37585,7 @@ float roomMask(int i, vec3 vRoomPos) {
       if (on && !built.baked) {
         const t0 = performance.now();
         built.baked = bakeLightMaps(built.meshes, built.leds, { power: tune.power, halo: tune.halo, floorScale: tune.floor, wallScale: tune.wall, extraMeshes: built.fixtureMeshes });
-        console.info(`[plan] baked light maps in ${Math.round(performance.now() - t0)} ms, plan map ${built.baked.size.join("x")}`);
+        console.info(`[plan] baked light maps in ${Math.round(performance.now() - t0)} ms: ${built.baked.maps.size} maps, ${built.baked.emitters} bounce patches`);
       }
       mappedLights = on;
       built.baked?.apply(on);

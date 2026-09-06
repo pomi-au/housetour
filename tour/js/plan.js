@@ -38,7 +38,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const RENDER = { dpr: TOUCH ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, haloLights: true };
   const SPOT_POOL = RENDER.lights;   // pooled downlights; the nearest fixtures take a slot, the rest wait
   const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1.0, base: 1.0, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
-  let mappedLights = false;   // L: house lights from baked light maps instead of the run-time spot pool
+  let mappedLights = true;    // the walk renders from baked light maps (direct plus bounce light); L switches to the run-time spot pool
   const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
   const TUNE_KEY = 'residence.tour.lighting.v1';   // shared with tour.html, so both pages show the same light
   const tune = { ...TUNE_DEFAULTS };
@@ -266,7 +266,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       r.rects.forEach((q, k) => place(buildCeiling([q.x0, q.y0, q.x1, q.y1], r.ceiling - 0.001 * k, ceilingMaterial, frame), meshes));
     }
     const leds = lighting.lights.map(l => ({
-      world: [l.x - frame.cx, l.z + floorTop, -(l.y - frame.cy)], room: lighting.rooms[l.room],
+      world: [l.x - frame.cx, l.z + floorTop, -(l.y - frame.cy)], room: lighting.rooms[l.room], roomIndex: l.room,
       boxes: l.boxes.map(b => [b[0] - frame.cx, -(b[3] - frame.cy), b[2] - frame.cx, -(b[1] - frame.cy)]),
       yLo: floorTop - 0.45, yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
     }));
@@ -555,7 +555,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (on && !built.baked) {
       const t0 = performance.now();
       built.baked = bakeLightMaps(built.meshes, built.leds, { power: tune.power, halo: tune.halo, floorScale: tune.floor, wallScale: tune.wall, extraMeshes: built.fixtureMeshes });
-      console.info(`[plan] baked light maps in ${Math.round(performance.now() - t0)} ms, plan map ${built.baked.size.join('x')}`);
+      console.info(`[plan] baked light maps in ${Math.round(performance.now() - t0)} ms: ${built.baked.maps.size} maps, ${built.baked.emitters} bounce patches`);
     }
     mappedLights = on;
     built.baked?.apply(on);
