@@ -154,7 +154,7 @@ body[data-tour-mode="walk"] #tour-crosshair { display: block; }
   font-size: 12px;
   display: none;
 }
-#tour-target:not(:empty) { display: block; }
+#tour-target:not(:empty) { display: none; }   /* tooltip retired: the usable object gets a lime outline instead */
 
 #tour-exit {
   position: absolute;

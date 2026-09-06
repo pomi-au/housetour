@@ -24,7 +24,7 @@ In the walking view the upper level sits 0.2 m lower than in the overview, so th
 
 Mirrored wardrobe sliders and the shower glass carry glossy planar reflections (25 % mirror), and the vanity cabinet doors carry full mirrors that swing with the doors. Reflections render only while close and on screen, show one bounce only, and leave out the downlight lens glow.
 
-A procedural skeleton (three.js primitives, no assets) waits inside the closets. There is one instance: it moves, while the leaf is still shut, to whichever closet door the walker opens: the three mirrored robe sliders, the upper and ground linen doors and the pantry. A lone skull rests on the shelf inside the vanity mirror cabinet.
+A procedural skeleton (three.js primitives, no assets) waits inside the closets. There is one instance: it moves, while the leaf is still shut, to whichever closet door the walker opens: the three mirrored robe sliders, the upper and ground linen doors and the pantry. A skull, a hand and loose bones rest on the shelves inside the vanity mirror cabinet, and a second skeleton lies in the bathtub while the bathroom door is open.
 
 The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and slides along walls.
 

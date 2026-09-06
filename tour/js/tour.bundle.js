@@ -38431,18 +38431,91 @@ float roomMask(int i, vec3 vRoomPos) {
       pendingCloset = null;
       root.add(skeleton);
       {
-        const shelf = R.meshes.find((m) => m.name === "T18-VANITY-moonlight-adjustable-glass-shelf-1");
-        if (shelf) {
-          const [lo, hi] = shelf.shadowBounds;
-          const skull = buildSkull();
-          skull.position.set((lo[0] + hi[0]) / 2, itemY(shelf, hi[1]) + 0.105, (lo[2] + hi[2]) / 2);
+        const shelf1 = R.meshes.find((m) => m.name === "T18-VANITY-moonlight-adjustable-glass-shelf-1");
+        const shelf2 = R.meshes.find((m) => m.name === "T18-VANITY-moonlight-adjustable-glass-shelf-2");
+        if (shelf1 && shelf2) {
+          const [lo, hi] = shelf1.shadowBounds;
+          const bone = boneMaterial();
+          const x = (lo[0] + hi[0]) / 2, depth = hi[0] - lo[0];
+          const zL = lo[2] + (hi[2] - lo[2]) * 0.25, zR = lo[2] + (hi[2] - lo[2]) * 0.75;
+          const y1 = itemY(shelf1, hi[1]), y2 = itemY(shelf2, shelf2.shadowBounds[1][1]);
+          const k = Math.min(0.7, (depth - 0.02) / 0.2);
+          const skull = buildSkull(bone);
+          skull.scale.setScalar(k);
+          skull.position.set(x, y1 + 0.105 * k, zR);
           skull.rotation.y = -Math.PI / 2;
           root.add(skull);
+          const hand = new Group();
+          const palm = new Mesh(new BoxGeometry(0.05, 0.012, 0.055), bone);
+          palm.castShadow = true;
+          hand.add(palm);
+          for (let f = 0; f < 4; f++) {
+            const fg = new Mesh(new CylinderGeometry(45e-4, 35e-4, 0.06, 6), bone);
+            fg.rotation.z = Math.PI / 2;
+            fg.position.set(-0.05, 0, -0.02 + f * 0.013);
+            fg.castShadow = true;
+            hand.add(fg);
+          }
+          const thumb = new Mesh(new CylinderGeometry(45e-4, 35e-4, 0.04, 6), bone);
+          thumb.rotation.z = Math.PI / 2;
+          thumb.rotation.y = 0.6;
+          thumb.position.set(-0.03, 0, 0.035);
+          thumb.castShadow = true;
+          hand.add(thumb);
+          hand.scale.setScalar(k);
+          hand.position.set(x + 0.01, y1 + 6e-3 * k, zL);
+          root.add(hand);
+          const longBone = (len, r) => {
+            const g = new Group();
+            const shaft = new Mesh(new CylinderGeometry(r, r, len, 8), bone);
+            shaft.rotation.x = Math.PI / 2;
+            g.add(shaft);
+            for (const e of [-1, 1]) {
+              const knob = new Mesh(new SphereGeometry(r * 1.8, 8, 6), bone);
+              knob.position.z = e * len / 2;
+              g.add(knob);
+            }
+            g.traverse((o) => {
+              o.castShadow = true;
+            });
+            return g;
+          };
+          const femur = longBone(0.34, 0.012);
+          femur.position.set(x - 0.02, y2 + 0.022, zL + 0.02);
+          femur.rotation.y = 0.08;
+          root.add(femur);
+          const ulna = longBone(0.24, 8e-3);
+          ulna.position.set(x + 0.025, y2 + 0.015, zR - 0.05);
+          ulna.rotation.y = -0.12;
+          root.add(ulna);
+          const rib = new Mesh(new TorusGeometry(0.06, 6e-3, 6, 20, Math.PI * 1.1), bone);
+          rib.rotation.x = Math.PI / 2;
+          rib.rotation.z = 0.4;
+          rib.position.set(x, y2 + 6e-3, zR + 0.12);
+          rib.castShadow = true;
+          root.add(rib);
+        }
+      }
+      let tubSkeleton = null;
+      {
+        const shell = R.meshes.find((m) => m.name === "T18-BATH-maxton-1-inset-acrylic-shell") || R.meshes.find((m) => /^T18-BATH-maxton-\d+-inset-acrylic-shell$/.test(m.name));
+        const door = R.openingInteractions.find((st) => st.id === "D04");
+        if (shell && door) {
+          const [lo, hi] = shell.shadowBounds;
+          const len = hi[2] - lo[2];
+          tubSkeleton = buildSkeleton();
+          const k = Math.min(0.9, (len - 0.1) / 1.7);
+          tubSkeleton.scale.setScalar(k);
+          tubSkeleton.rotation.x = -Math.PI / 2;
+          tubSkeleton.position.set((lo[0] + hi[0]) / 2, itemY(shell, lo[1]) + 0.05, hi[2] - 0.06);
+          tubSkeleton.userData.door = door;
+          tubSkeleton.visible = door.progress > 0.02;
+          root.add(tubSkeleton);
         }
       }
       scene.add(root);
       culledLevel = null;
-      built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+      built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
       buildDirty = false;
       console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1e3)}k triangles, ${leds.length} downlights`);
     }
@@ -38687,9 +38760,92 @@ float roomMask(int i, vec3 vRoomPos) {
         if (h.distance > nearest + 0.03) break;
         let o = h.object;
         while (o && !o.userData.action) o = o.parent;
-        if (o?.userData.action) return o.userData.action;
+        if (o?.userData.action) {
+          focusOwner = o;
+          return o.userData.action;
+        }
       }
+      focusOwner = null;
       return null;
+    }
+    let focusOwner = null;
+    let outlineMeshes = [];
+    let outlineOwner = null;
+    let outlineTarget = null;
+    const OUTLINE_LAYER = 7;
+    const outlineDepthOnly = new MeshBasicMaterial({ colorWrite: false });
+    const outlineWhite = new MeshBasicMaterial({ color: 16777215, side: DoubleSide, toneMapped: false });
+    const outlineQuad = new Mesh(new PlaneGeometry(2, 2), new ShaderMaterial({
+      uniforms: { tMask: { value: null }, texel: { value: new Vector2(1 / 512, 1 / 512) }, color: { value: new Color(10354463) } },
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
+      fragmentShader: `uniform sampler2D tMask; uniform vec2 texel; uniform vec3 color; varying vec2 vUv;
+      void main() {
+        float c = texture2D(tMask, vUv).r;
+        if (c > 0.5) discard;                      // inside the object: no fill
+        float m = 0.0;
+        for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) m = max(m, texture2D(tMask, vUv + vec2(float(i), float(j)) * texel).r);
+        if (m < 0.5) discard;                      // no object nearby
+        gl_FragColor = vec4(color, 0.95);
+      }`
+    }));
+    outlineQuad.frustumCulled = false;
+    const outlineScene = new Scene();
+    outlineScene.add(outlineQuad);
+    const outlineCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    function outlineMeshesFor(owner, action) {
+      if (!owner || !built) return [];
+      if (action?.kind === "light" || action?.control) {
+        const state = action.state || action.control?.state;
+        const sw = built.switchModels.find((m) => m.state === state);
+        const meshes2 = [];
+        if (sw) sw.rocker.traverse((o) => {
+          if (o.isMesh) meshes2.push(o);
+        });
+        return meshes2;
+      }
+      const meshes = [];
+      owner.traverse((o) => {
+        if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o);
+      });
+      return meshes;
+    }
+    function updateOutline(action) {
+      const owner = action ? focusOwner : null;
+      if (owner === outlineOwner) return;
+      outlineOwner = owner;
+      outlineMeshes = outlineMeshesFor(owner, action);
+    }
+    function drawOutline() {
+      if (!outlineMeshes.length) return;
+      const size = renderer.getDrawingBufferSize(new Vector2());
+      const w = Math.max(2, Math.round(size.x / 2)), h = Math.max(2, Math.round(size.y / 2));
+      if (!outlineTarget) outlineTarget = new WebGLRenderTarget(w, h, { depthBuffer: true, minFilter: LinearFilter, magFilter: LinearFilter });
+      else if (outlineTarget.width !== w || outlineTarget.height !== h) outlineTarget.setSize(w, h);
+      const prevTarget = renderer.getRenderTarget(), prevAuto = renderer.autoClear, prevTone = renderer.toneMapping;
+      renderer.toneMapping = NoToneMapping;
+      renderer.setRenderTarget(outlineTarget);
+      renderer.setClearColor(0, 1);
+      renderer.clear();
+      scene.overrideMaterial = outlineDepthOnly;
+      renderer.render(scene, camera);
+      for (const m of outlineMeshes) m.layers.enable(OUTLINE_LAYER);
+      const savedMask = camera.layers.mask;
+      camera.layers.set(OUTLINE_LAYER);
+      scene.overrideMaterial = outlineWhite;
+      renderer.autoClear = false;
+      renderer.render(scene, camera);
+      camera.layers.mask = savedMask;
+      for (const m of outlineMeshes) m.layers.disable(OUTLINE_LAYER);
+      scene.overrideMaterial = null;
+      renderer.setRenderTarget(prevTarget);
+      renderer.toneMapping = prevTone;
+      outlineQuad.material.uniforms.tMask.value = outlineTarget.texture;
+      outlineQuad.material.uniforms.texel.value.set(1 / w, 1 / h);
+      renderer.render(outlineScene, outlineCamera);
+      renderer.autoClear = prevAuto;
     }
     let pendingCloset = null;
     function placeSkeletonBehindMovingLeaf() {
@@ -38851,6 +39007,7 @@ float roomMask(int i, vec3 vRoomPos) {
         sceneDirty = 3;
       }
       placeSkeletonBehindMovingLeaf();
+      if (built.tubSkeleton) built.tubSkeleton.visible = built.tubSkeleton.userData.door.progress > 0.02;
       cullOtherLevel();
       updateLights(dt);
       const poseKey = `${player.x.toFixed(3)}|${player.footY.toFixed(3)}|${player.z.toFixed(3)}|${player.yaw.toFixed(4)}|${player.pitch.toFixed(4)}|${zoomLevel.toFixed(3)}`;
@@ -38943,10 +39100,10 @@ float roomMask(int i, vec3 vRoomPos) {
       });
       focusAction = centreTarget();
       crosshair.dataset.target = focusAction ? "true" : "false";
-      const label = describe(focusAction);
-      if (targetLabel.textContent !== label) targetLabel.textContent = label;
+      updateOutline(focusAction);
       if (composer) composer.render(dt);
       else renderer.render(scene, camera);
+      drawOutline();
       frames++;
       fpsTime += dt;
       if (fpsTime >= 0.5) {
@@ -39071,6 +39228,7 @@ float roomMask(int i, vec3 vRoomPos) {
         lightStatesBefore = null;
       }
       targetLabel.textContent = "";
+      updateOutline(null);
       const eyePose = { yaw: player.yaw, pitch: player.pitch, distance: 0.12, target: [player.x, player.footY + EYE_HEIGHT, player.z] };
       const back = overviewPoseBefore || { yaw: player.yaw, pitch: 0.68, distance: 16.8, target: [player.x, player.footY + 0.4, player.z] };
       Object.assign(R.camera, { yaw: eyePose.yaw, pitch: eyePose.pitch, distance: eyePose.distance, target: [...eyePose.target] });

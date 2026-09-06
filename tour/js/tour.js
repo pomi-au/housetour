@@ -1061,21 +1061,71 @@ float roomMask(int i, vec3 vRoomPos) {
     if (firstSpot) { skeleton.position.copy(firstSpot.pos); skeleton.rotation.y = firstSpot.yaw; skeleton.visible = true; }
     pendingCloset = null;
     root.add(skeleton);
-    // Only a skull in the vanity mirror cabinet, resting on the lower glass shelf and facing the room.
+    // Vanity mirror cabinet: a skull in the right bay of the lower shelf, a hand in the left bay and loose bones
+    // on the upper shelf. Everything is scaled to the shelf depth so the closed doors clear it.
     {
-      const shelf = R.meshes.find(m => m.name === 'T18-VANITY-moonlight-adjustable-glass-shelf-1');
-      if (shelf) {
-        const [lo, hi] = shelf.shadowBounds;
-        const skull = buildSkull();
-        skull.position.set((lo[0] + hi[0]) / 2, itemY(shelf, hi[1]) + 0.105, (lo[2] + hi[2]) / 2);
+      const shelf1 = R.meshes.find(m => m.name === 'T18-VANITY-moonlight-adjustable-glass-shelf-1');
+      const shelf2 = R.meshes.find(m => m.name === 'T18-VANITY-moonlight-adjustable-glass-shelf-2');
+      if (shelf1 && shelf2) {
+        const [lo, hi] = shelf1.shadowBounds;
+        const bone = boneMaterial();
+        const x = (lo[0] + hi[0]) / 2, depth = hi[0] - lo[0];
+        const zL = lo[2] + (hi[2] - lo[2]) * 0.25, zR = lo[2] + (hi[2] - lo[2]) * 0.75;   // bay centres either side of the divider
+        const y1 = itemY(shelf1, hi[1]), y2 = itemY(shelf2, shelf2.shadowBounds[1][1]);
+        const k = Math.min(0.7, (depth - 0.02) / 0.2);   // skull diameter fits the shelf depth
+        const skull = buildSkull(bone);
+        skull.scale.setScalar(k);
+        skull.position.set(x, y1 + 0.105 * k, zR);
         skull.rotation.y = -Math.PI / 2;   // face toward -x, out of the cabinet
         root.add(skull);
+        // A hand lying palm down in the left bay, fingers toward the doors.
+        const hand = new THREE.Group();
+        const palm = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.055), bone); palm.castShadow = true; hand.add(palm);
+        for (let f = 0; f < 4; f++) {
+          const fg = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0035, 0.06, 6), bone);
+          fg.rotation.z = Math.PI / 2; fg.position.set(-0.05, 0, -0.02 + f * 0.013); fg.castShadow = true; hand.add(fg);
+        }
+        const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0035, 0.04, 6), bone);
+        thumb.rotation.z = Math.PI / 2; thumb.rotation.y = 0.6; thumb.position.set(-0.03, 0, 0.035); thumb.castShadow = true; hand.add(thumb);
+        hand.scale.setScalar(k); hand.position.set(x + 0.01, y1 + 0.006 * k, zL);
+        root.add(hand);
+        // Two long bones and a rib on the upper shelf, lying along the shelf.
+        const longBone = (len, r) => {
+          const g = new THREE.Group();
+          const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), bone); shaft.rotation.x = Math.PI / 2; g.add(shaft);
+          for (const e of [-1, 1]) { const knob = new THREE.Mesh(new THREE.SphereGeometry(r * 1.8, 8, 6), bone); knob.position.z = e * len / 2; g.add(knob); }
+          g.traverse(o => { o.castShadow = true; });
+          return g;
+        };
+        const femur = longBone(0.34, 0.012); femur.position.set(x - 0.02, y2 + 0.022, zL + 0.02); femur.rotation.y = 0.08; root.add(femur);
+        const ulna = longBone(0.24, 0.008); ulna.position.set(x + 0.025, y2 + 0.015, zR - 0.05); ulna.rotation.y = -0.12; root.add(ulna);
+        const rib = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.006, 6, 20, Math.PI * 1.1), bone);
+        rib.rotation.x = Math.PI / 2; rib.rotation.z = 0.4; rib.position.set(x, y2 + 0.006, zR + 0.12); rib.castShadow = true; root.add(rib);
+      }
+    }
+
+    // Bathtub: a skeleton lying on its back in the tub, feet at the taps, shown while the bathroom door is open.
+    let tubSkeleton = null;
+    {
+      const shell = R.meshes.find(m => m.name === 'T18-BATH-maxton-1-inset-acrylic-shell') || R.meshes.find(m => /^T18-BATH-maxton-\d+-inset-acrylic-shell$/.test(m.name));
+      const door = R.openingInteractions.find(st => st.id === 'D04');
+      if (shell && door) {
+        const [lo, hi] = shell.shadowBounds;
+        const len = hi[2] - lo[2];
+        tubSkeleton = buildSkeleton();
+        const k = Math.min(0.9, (len - 0.1) / 1.7);
+        tubSkeleton.scale.setScalar(k);
+        tubSkeleton.rotation.x = -Math.PI / 2;   // on its back, face up, body running toward -z from the feet
+        tubSkeleton.position.set((lo[0] + hi[0]) / 2, itemY(shell, lo[1]) + 0.05, hi[2] - 0.06);
+        tubSkeleton.userData.door = door;
+        tubSkeleton.visible = door.progress > 0.02;
+        root.add(tubSkeleton);
       }
     }
 
     scene.add(root);
     culledLevel = null;
-    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, tubSkeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
     buildDirty = false;
     console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1000)}k triangles, ${leds.length} downlights`);
   }
@@ -1286,9 +1336,89 @@ float roomMask(int i, vec3 vRoomPos) {
       if (h.distance > nearest + 0.03) break;          // only what is at the front surface
       let o = h.object;
       while (o && !o.userData.action) o = o.parent;
-      if (o?.userData.action) return o.userData.action;
+      if (o?.userData.action) { focusOwner = o; return o.userData.action; }
     }
+    focusOwner = null;
     return null;
+  }
+
+  // Lime silhouette on whatever the crosshair can use. The owning assembly (door leaf with its hardware, slider
+  // leaf, cabinet door, switch rocker) is drawn white into a half-size mask, depth-tested against the scene so
+  // hidden parts stay out, and a full-screen pass paints a rim where the mask ends: one outline for the whole
+  // object, no inner edges.
+  let focusOwner = null;
+  let outlineMeshes = [];
+  let outlineOwner = null;
+  let outlineTarget = null;
+  const OUTLINE_LAYER = 7;
+  const outlineDepthOnly = new THREE.MeshBasicMaterial({ colorWrite: false });
+  const outlineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, toneMapped: false });
+  const outlineQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+    uniforms: { tMask: { value: null }, texel: { value: new THREE.Vector2(1 / 512, 1 / 512) }, color: { value: new THREE.Color(0x9dff1f) } },
+    transparent: true, depthTest: false, depthWrite: false,
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D tMask; uniform vec2 texel; uniform vec3 color; varying vec2 vUv;
+      void main() {
+        float c = texture2D(tMask, vUv).r;
+        if (c > 0.5) discard;                      // inside the object: no fill
+        float m = 0.0;
+        for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) m = max(m, texture2D(tMask, vUv + vec2(float(i), float(j)) * texel).r);
+        if (m < 0.5) discard;                      // no object nearby
+        gl_FragColor = vec4(color, 0.95);
+      }`
+  }));
+  outlineQuad.frustumCulled = false;
+  const outlineScene = new THREE.Scene(); outlineScene.add(outlineQuad);
+  const outlineCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  function outlineMeshesFor(owner, action) {
+    if (!owner || !built) return [];
+    if (action?.kind === 'light' || action?.control) {
+      const state = action.state || action.control?.state;
+      const sw = built.switchModels.find(m => m.state === state);
+      const meshes = []; if (sw) sw.rocker.traverse(o => { if (o.isMesh) meshes.push(o); });
+      return meshes;
+    }
+    const meshes = [];
+    owner.traverse(o => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o); });
+    return meshes;
+  }
+  function updateOutline(action) {
+    const owner = action ? focusOwner : null;
+    if (owner === outlineOwner) return;
+    outlineOwner = owner;
+    outlineMeshes = outlineMeshesFor(owner, action);
+  }
+  // Draws the rim over the finished frame. Costs a half-size depth pass of the scene, only while something is targeted.
+  function drawOutline() {
+    if (!outlineMeshes.length) return;
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const w = Math.max(2, Math.round(size.x / 2)), h = Math.max(2, Math.round(size.y / 2));
+    if (!outlineTarget) outlineTarget = new THREE.WebGLRenderTarget(w, h, { depthBuffer: true, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    else if (outlineTarget.width !== w || outlineTarget.height !== h) outlineTarget.setSize(w, h);
+    const prevTarget = renderer.getRenderTarget(), prevAuto = renderer.autoClear, prevTone = renderer.toneMapping;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.setRenderTarget(outlineTarget);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+    // 1. Scene depth only, so the mask respects what is in front of the object.
+    scene.overrideMaterial = outlineDepthOnly;
+    renderer.render(scene, camera);
+    // 2. The targeted assembly in white, on its own layer.
+    for (const m of outlineMeshes) m.layers.enable(OUTLINE_LAYER);
+    const savedMask = camera.layers.mask; camera.layers.set(OUTLINE_LAYER);
+    scene.overrideMaterial = outlineWhite;
+    renderer.autoClear = false;
+    renderer.render(scene, camera);
+    camera.layers.mask = savedMask;
+    for (const m of outlineMeshes) m.layers.disable(OUTLINE_LAYER);
+    scene.overrideMaterial = null;
+    // 3. Rim over the frame.
+    renderer.setRenderTarget(prevTarget);
+    renderer.toneMapping = prevTone;
+    outlineQuad.material.uniforms.tMask.value = outlineTarget.texture;
+    outlineQuad.material.uniforms.texel.value.set(1 / w, 1 / h);
+    renderer.render(outlineScene, outlineCamera);
+    renderer.autoClear = prevAuto;
   }
 
   let pendingCloset = null;
@@ -1438,6 +1568,7 @@ float roomMask(int i, vec3 vRoomPos) {
     }
     if (moving) { renderer.shadowMap.needsUpdate = true; for (const s of built.spots) if (s.castShadow) s.shadow.needsUpdate = true; built.sun.shadow.needsUpdate = true; sceneDirty = 3; }
     placeSkeletonBehindMovingLeaf();
+    if (built.tubSkeleton) built.tubSkeleton.visible = built.tubSkeleton.userData.door.progress > 0.02;
     cullOtherLevel();
     updateLights(dt);
     // Does anything on screen change this frame? A still walker, closed doors, stopped clock and unchanged lights
@@ -1526,9 +1657,9 @@ float roomMask(int i, vec3 vRoomPos) {
     helpersShown.forEach(h => { h.visible = true; });
     focusAction = centreTarget();
     crosshair.dataset.target = focusAction ? 'true' : 'false';
-    const label = describe(focusAction);
-    if (targetLabel.textContent !== label) targetLabel.textContent = label;
+    updateOutline(focusAction);
     if (composer) composer.render(dt); else renderer.render(scene, camera);   // direct: no post-processing pass
+    drawOutline();
     frames++; fpsTime += dt;
     if (fpsTime >= 0.5) { fps = Math.round(frames / fpsTime); frames = 0; fpsTime = 0;
       if (tuningOpen && tune.clock) syncTunePanel();
@@ -1627,7 +1758,7 @@ float roomMask(int i, vec3 vRoomPos) {
     body.dataset.tourMode = 'overview';
     // Put every switch back the way it was before the tour.
     if (lightStatesBefore) { lightStatesBefore.forEach(([state, active]) => { if (state.active !== active) R.commandRoomLight(state, active, { silent: true, announce: false }); }); lightStatesBefore = null; }
-    targetLabel.textContent = '';
+    targetLabel.textContent = ''; updateOutline(null);
     // 3D transition back: start at the walker's eye, pull out to the overview.
     const eyePose = { yaw: player.yaw, pitch: player.pitch, distance: 0.12, target: [player.x, player.footY + EYE_HEIGHT, player.z] };
     const back = overviewPoseBefore || { yaw: player.yaw, pitch: 0.68, distance: 16.8, target: [player.x, player.footY + 0.4, player.z] };
