@@ -32,18 +32,15 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 
 ## Plan model viewer
 
-`model.html` shows a building model from JSON files instead of the coded residence. Load the files of one job together or one at a time; each file is a layer and the layers share one centre:
+`model.html` shows a house model JSON instead of the coded residence. It loads one file of schema `pomi.house_model.v1`: choose it in the panel, drop it on the page, or open `model.html?src=path/to/house_model.json`.
 
-| File | Schema | What is built |
-| --- | --- | --- |
-| Slab and footing `005_01` | `foma.005_01.slab-footing-model.v1` | Triangle meshes of the slab and the footing. The highest slab top is the walking floor. |
-| Wall envelopes `005_03` | `foma.005_03.wall-envelope-model.v1` | Triangle mesh of every wall segment; the material key comes from the enclosing wall leaf (face brick, common brick, steel frame). |
-| Roof envelope `005_02` | `foma.005_02.roof-envelope-model.v1` | Each underside surface is a plane over its outline, built as a 50 mm roof prism; every eave height line gets a fascia board. |
-| Openings `005_04a …_final_setout_2d_3d_B.json` | `foma.005_04a.final_setout_2d_3d.v1` | The opening cut list (`three_d_scene.opening_cut_report.opening_records`: plan rectangle and vertical interval in millimetres). Every wall segment an opening crosses is rebuilt from its plan rectangle and top profile as pieces around the hole; windows and sliding doors get a glass pane. The small `005_04_…_openings_frames_masonry.json` index holds no geometry. |
+| Part of the file | What is built |
+| --- | --- |
+| `elements` (slab, footing, wall, roof; vertices and faces in plan metres, z up from the slab top) | Meshes with the tour's finishes by material family and finish: concrete, face brick, rendered masonry, steel, roof sheet. The slab top is the walking floor. |
+| `fixtures` (doors and windows: centre, rotation, width, depth, sill, head) | Every rectangular wall a fixture crosses is rebuilt as pieces around the hole (between, above, below). Windows and sliding doors get a glass pane. Doors stay open. |
+| `guides.eave_height_lines` | A fascia board along every eave line. |
 
-Any other JSON whose entries carry `mesh.vertices_m`, `mesh.triangle_indices` and a `material_key` loads as well. Choose the files in the panel, drop them on the page, or open `model.html?src=slab.json,walls.json,roof.json`. The Load JSON button adds more layers; Clear model starts again.
-
-The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it (the click looks through the roof and walls for the slab). The walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. Materials follow the file's material family (concrete, masonry, timber, steel, glass, tile, carpet, roof sheet, fascia, else paint) with roughness and metalness from the file. JSON x, y are plan metres with z up; the model is centred on the lawn.
+The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it (the click looks through the roof and walls for the slab). The walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. The model is centred on the lawn; the lot, hedge and street pitch grow with it.
 
 Source: `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; styles in `tour/css/plan.css`. Sample files can sit in `models/` (not committed).
 

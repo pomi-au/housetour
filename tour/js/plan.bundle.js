@@ -35873,10 +35873,10 @@ void main() {
       return new MeshStandardMaterial(p);
     }
     const materialCache = /* @__PURE__ */ new Map();
-    function materialFor(key, spec, usage) {
-      const cacheKey = key + "|" + JSON.stringify(spec || null);
+    function materialFor(key, spec, finish) {
+      const cacheKey = key + "|" + (finish || "") + "|" + JSON.stringify(spec || null);
       if (materialCache.has(cacheKey)) return materialCache.get(cacheKey);
-      const family = `${spec?.library_material_family || ""} ${spec?.library_material_id || ""} ${usage?.semanticClass || ""} ${key}`.toLowerCase();
+      const family = `${finish || ""} ${spec?.library_material_family || ""} ${spec?.library_material_id || ""} ${key}`.toLowerCase();
       const rough = Number.isFinite(spec?.roughness) ? spec.roughness : null;
       const metal = Number.isFinite(spec?.metalness) ? spec.metalness : null;
       const common2 = { side: DoubleSide };
@@ -35900,6 +35900,9 @@ void main() {
         m = surfaceMaterial({ ...common2, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(bumpMap, 240, 0.9), bumpMap, bumpScale: 0.08 });
       } else if (/tile|ceramic|porcelain/.test(family)) {
         m = surfaceMaterial({ ...common2, color: 14605268, roughness: rough ?? 0.18, metalness: 0, envMapIntensity: 0.6 });
+      } else if (/^render\b/.test(family)) {
+        const bumpMap = reliefTexture("render", 512, [[9e3, 3, 120], [3e3, 6, 90], [800, 14, 60]]);
+        m = surfaceMaterial({ ...common2, color: 15328474, roughness: 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.1 });
       } else if (/brick|masonry|block/.test(family)) {
         const bumpMap = reliefTexture("render", 512, [[9e3, 3, 120], [3e3, 6, 90], [800, 14, 60]]);
         m = surfaceMaterial({ ...common2, color: 11037274, roughness: rough ?? 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.1 });
@@ -35919,42 +35922,65 @@ void main() {
       materialCache.set(cacheKey, m);
       return m;
     }
-    function openingRects(json) {
-      const records = json.three_d_scene?.opening_cut_report?.opening_records || json.opening_cut_report?.opening_records || [];
+    const ROOF_SHEET = 0.05, FASCIA_DEPTH = 0.18, FASCIA_THICK = 0.03;
+    function prismSolid(id, list, material, contour, zTop, zBot, extra = {}) {
+      const pts = contour.map(([x, y]) => new Vector2(x, y));
+      if (ShapeUtils.isClockWise(pts)) pts.reverse();
+      const tris = ShapeUtils.triangulateShape(pts, []);
+      const n = pts.length, vertices = [], faces = [];
+      for (const p of pts) vertices.push([p.x, p.y, zTop(p.x, p.y)]);
+      for (const p of pts) vertices.push([p.x, p.y, zBot(p.x, p.y)]);
+      for (const [a, b, c] of tris) {
+        faces.push([a, b, c]);
+        faces.push([n + a, n + c, n + b]);
+      }
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        faces.push([i, n + i, n + j]);
+        faces.push([i, n + j, j]);
+      }
+      return { id, list, material, vertices, faces, ...extra };
+    }
+    function fixtureBoxes(json) {
       const out = [];
-      for (const r of records) {
-        const rect = r.rect_mm, v = r.vertical_mm;
-        if (!Array.isArray(rect) || rect.length !== 4 || !Array.isArray(v) || v.length !== 2) continue;
+      for (const f of json.fixtures || []) {
+        const [px2, py2] = f.position || [];
+        if (!Number.isFinite(px2) || !Number.isFinite(py2) || !(f.width_m > 0)) continue;
+        const alongX = Math.abs((Number(f.rotation_deg) || 0) % 180) < 45;
+        const w = f.width_m / 2, d = (f.depth_m > 0 ? f.depth_m : 0.3) / 2 + 0.02;
+        const sill = Number.isFinite(f.sill_m) ? f.sill_m : 0;
+        const head = Number.isFinite(f.head_m) ? f.head_m : sill + (f.height_m > 0 ? f.height_m : 2.1);
         out.push({
-          id: r.cut_id || r.label,
-          kind: r.kind || "",
-          label: r.label || "",
-          x0: Math.min(rect[0], rect[2]) / 1e3,
-          x1: Math.max(rect[0], rect[2]) / 1e3,
-          y0: Math.min(rect[1], rect[3]) / 1e3,
-          y1: Math.max(rect[1], rect[3]) / 1e3,
-          z0: Math.min(v[0], v[1]) / 1e3,
-          z1: Math.max(v[0], v[1]) / 1e3
+          id: f.id,
+          kind: f.kind || "",
+          label: f.label || "",
+          alongX,
+          cx: px2,
+          cy: py2,
+          x0: px2 - (alongX ? w : d),
+          x1: px2 + (alongX ? w : d),
+          y0: py2 - (alongX ? d : w),
+          y1: py2 + (alongX ? d : w),
+          z0: sill,
+          z1: head
         });
       }
       return out;
     }
-    function cutWallSegment(seg, id, material, openings) {
-      const ring = seg.geometry_model_xy_m?.coordinates?.[0];
-      const profile = seg.top_profile_model_xyz_m;
-      if (!Array.isArray(ring) || ring.length < 4 || !Array.isArray(profile) || !profile.length) return null;
-      let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
-      for (const [x, y] of ring) {
+    function cutWall(el, openings) {
+      const V = el.vertices;
+      let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity, bottom = Infinity;
+      for (const [x, y, z] of V) {
         px0 = Math.min(px0, x);
         px1 = Math.max(px1, x);
         py0 = Math.min(py0, y);
         py1 = Math.max(py1, y);
+        bottom = Math.min(bottom, z);
       }
-      const area2 = Math.abs(ShapeUtils.area(ring.map(([x, y]) => new Vector2(x, y))));
-      if (area2 < (px1 - px0) * (py1 - py0) * 0.97) return null;
+      const eps = 2e-3;
+      if (!V.every(([x, y]) => Math.abs(x - px0) < eps || Math.abs(x - px1) < eps || Math.abs(y - py0) < eps || Math.abs(y - py1) < eps)) return null;
       const alongX = px1 - px0 >= py1 - py0;
       const A0 = alongX ? px0 : py0, A1 = alongX ? px1 : py1, B0 = alongX ? py0 : px0, B1 = alongX ? py1 : px1;
-      const bottom = Number(seg.bottom_z_m) || 0;
       const cuts = [];
       for (const o of openings) {
         const ox0 = Math.max(px0, o.x0), ox1 = Math.min(px1, o.x1), oy0 = Math.max(py0, o.y0), oy1 = Math.min(py1, o.y1);
@@ -35974,7 +36000,8 @@ void main() {
           last.z1 = Math.max(last.z1, c.z1);
         } else merged.push({ ...c });
       }
-      const pts = profile.map((p) => [alongX ? p[0] : p[1], p[2]]).sort((p, q) => p[0] - q[0]);
+      const pts = V.filter((v) => v[2] > bottom + 0.01).map((v) => [alongX ? v[0] : v[1], v[2]]).sort((p, q) => p[0] - q[0]);
+      if (!pts.length) return null;
       const zTop = (x, y) => {
         const t = alongX ? x : y;
         if (t <= pts[0][0]) return pts[0][1];
@@ -35988,8 +36015,9 @@ void main() {
       const rect = (a0, a1) => alongX ? [[a0, B0], [a1, B0], [a1, B1], [a0, B1]] : [[B0, a0], [B1, a0], [B1, a1], [B0, a1]];
       const pieces = [];
       let n = 0;
+      const extra = { category: el.category, role: el.role, finish: el.finish };
       const piece = (a0, a1, zLo, zHi) => {
-        if (a1 - a0 > 2e-3) pieces.push(prismSolid(`${id}-${++n}`, "wall_envelopes.cut", material, rect(a0, a1), zHi || zTop, () => zLo));
+        if (a1 - a0 > 2e-3) pieces.push(prismSolid(`${el.id}-${++n}`, "wall.cut", el.material, rect(a0, a1), zHi || zTop, () => zLo, extra));
       };
       let cursor = A0;
       for (const c of merged) {
@@ -36001,78 +36029,36 @@ void main() {
       if (cursor < A1 - 1e-3) piece(cursor, A1, bottom);
       return pieces;
     }
-    function glazingSolids(openings) {
-      return openings.filter((o) => /window|sliding|glass/.test(o.kind)).map((o) => {
-        const alongX = o.x1 - o.x0 >= o.y1 - o.y0;
-        const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2, t = 3e-3;
-        const contour = alongX ? [[o.x0, cy - t], [o.x1, cy - t], [o.x1, cy + t], [o.x0, cy + t]] : [[cx - t, o.y0], [cx + t, o.y0], [cx + t, o.y1], [cx - t, o.y1]];
-        return prismSolid(`${o.id}-glass`, "openings.glazing", "window_glass", contour, () => o.z1, () => o.z0);
-      });
-    }
-    function collectSolids(json, openings = []) {
+    function houseSolids(json) {
+      if (!Array.isArray(json.elements)) throw new Error("not a house model: no elements list (expected schema pomi.house_model.v1)");
+      const openings = fixtureBoxes(json);
       const out = [];
-      const visit = (node, path, material) => {
-        if (Array.isArray(node)) {
-          node.forEach((n) => visit(n, path, material));
-          return;
+      for (const el of json.elements) {
+        if (!Array.isArray(el.vertices) || !Array.isArray(el.faces)) continue;
+        const cut = el.category === "wall" && openings.length ? cutWall(el, openings) : null;
+        if (cut) {
+          out.push(...cut);
+          continue;
         }
-        if (!node || typeof node !== "object") return;
-        const mat = node.material_key || material;
-        const mesh = node.mesh;
-        if (mesh && Array.isArray(mesh.vertices_m) && Array.isArray(mesh.triangle_indices)) {
-          const id = node.slab_id || node.footing_id || node.segment_id || node.wall_leaf_id || node.component_id || node.id || path;
-          const cut = openings.length && node.top_profile_model_xyz_m ? cutWallSegment(node, id, mat || "default", openings) : null;
-          if (cut) {
-            out.push(...cut);
-            return;
-          }
-          out.push({ id, list: path, material: mat || "default", mesh, top: node.top_z_m, bottom: node.bottom_z_m });
-          return;
-        }
-        for (const [k, v] of Object.entries(node)) if (k !== "inputs" && k !== "material_library" && k !== "artifacts" && k !== "three_d_scene") visit(v, path ? `${path}.${k}` : k, mat);
-      };
-      visit(json, "", null);
-      return out.concat(roofSolids(json));
-    }
-    function prismSolid(id, list, material, contour, zTop, zBot) {
-      const pts = contour.map(([x, y]) => new Vector2(x, y));
-      if (ShapeUtils.isClockWise(pts)) pts.reverse();
-      const tris = ShapeUtils.triangulateShape(pts, []);
-      const n = pts.length, vertices_m = [], triangle_indices = [];
-      for (const p of pts) vertices_m.push([p.x, p.y, zTop(p.x, p.y)]);
-      for (const p of pts) vertices_m.push([p.x, p.y, zBot(p.x, p.y)]);
-      for (const [a, b, c] of tris) {
-        triangle_indices.push([a, b, c]);
-        triangle_indices.push([n + a, n + c, n + b]);
+        out.push({ id: el.id, list: el.category || "element", material: el.material || "default", vertices: el.vertices, faces: el.faces, category: el.category, role: el.role, finish: el.finish });
       }
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n;
-        triangle_indices.push([i, n + i, n + j]);
-        triangle_indices.push([i, n + j, j]);
+      for (const o of openings) {
+        if (!/window|sliding|glass/.test(o.kind)) continue;
+        const t = 3e-3;
+        const contour = o.alongX ? [[o.x0, o.cy - t], [o.x1, o.cy - t], [o.x1, o.cy + t], [o.x0, o.cy + t]] : [[o.cx - t, o.y0], [o.cx + t, o.y0], [o.cx + t, o.y1], [o.cx - t, o.y1]];
+        out.push(prismSolid(`${o.id}-glass`, "glazing", "window_glass", contour, () => o.z1, () => o.z0));
       }
-      return { id, list, material, mesh: { vertices_m, triangle_indices } };
-    }
-    const ROOF_SHEET = 0.05, FASCIA_DEPTH = 0.18, FASCIA_THICK = 0.03;
-    function roofSolids(json) {
-      const out = [];
-      for (const sf of json.roof_underside_envelope?.surfaces || []) {
-        const poly = sf.polygon_model_xy_m;
-        if (!Array.isArray(poly) || poly.length < 3 || !Array.isArray(sf.gradient_xy)) continue;
-        const [gx, gy] = sf.gradient_xy, c = Number(sf.intercept) || 0, nz = Number(sf.normal_z) || 1, thk = Number(sf.sheet_thickness_m) || 0;
-        const under = (x, y) => gx * x + gy * y + c - nz * thk;
-        out.push(prismSolid(sf.surface_id || "roof", "roof_underside_envelope.surfaces", "roof_sheet", poly, (x, y) => under(x, y) + ROOF_SHEET, under));
-      }
-      for (const e of json.eave_height_lines || []) {
-        const seg = e.segment_model_xyz_m;
-        if (!Array.isArray(seg) || seg.length !== 2) continue;
-        const [a, b] = seg, dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+      for (const e of json.guides?.eave_height_lines || []) {
+        const a = e.start, b = e.end;
+        if (!Array.isArray(a) || !Array.isArray(b)) continue;
+        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
         if (len < 1e-4) continue;
         const nx = -dy / len * FASCIA_THICK / 2, ny = dx / len * FASCIA_THICK / 2;
         const contour = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
         const zAt = (x, y) => a[2] + (b[2] - a[2]) * ((x - a[0]) * dx + (y - a[1]) * dy) / (len * len);
-        out.push(prismSolid(e.eave_height_line_id || "eave", "eave_height_lines", "fascia", contour, (x, y) => zAt(x, y) + 0.02, (x, y) => zAt(x, y) - FASCIA_DEPTH));
+        out.push(prismSolid(e.id || "eave", "fascia", "fascia", contour, (x, y) => zAt(x, y) + 0.02, (x, y) => zAt(x, y) - FASCIA_DEPTH));
       }
-      return out;
+      return { solids: out, openings };
     }
     const world = {};
     const worldRoot = new Group();
@@ -36215,21 +36201,13 @@ void main() {
       built.reflector.dispose?.();
       built = null;
     }
-    function buildModel(layers2) {
-      const openings = layers2.flatMap((l) => openingRects(l.json));
-      const solids = layers2.flatMap((l) => collectSolids(l.json, openings).map((s) => ({ ...s, layer: l.name })));
-      solids.push(...glazingSolids(openings).map((s) => ({ ...s, layer: "openings" })));
-      if (!solids.length) {
-        const stage = layers2[layers2.length - 1].json;
-        if (/^foma\.005_04\./.test(stage.schema || "") && !openingRects(stage).length) throw new Error("this index file has no geometry; load the 005_04a \u2026_final_setout_2d_3d_B.json file, which holds the opening cut list");
-        throw new Error("No mesh, roof surface, eave line or opening found");
-      }
-      const name = layers2.map((l) => l.name).join(" + ");
-      const materials = Object.assign({}, ...layers2.map((l) => l.json.materials || {}));
-      const usage = new Map(layers2.flatMap((l) => l.json.material_library?.materialUsage || []).map((u) => [u.materialKey, u]));
+    function buildModel(json, name) {
+      const { solids, openings } = houseSolids(json);
+      if (!solids.length) throw new Error("No element with vertices and faces found");
+      const materials = json.materials || {};
       disposeBuilt();
       let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-      for (const s of solids) for (const [x, y, z] of s.mesh.vertices_m) {
+      for (const s of solids) for (const [x, y, z] of s.vertices) {
         x0 = Math.min(x0, x);
         x1 = Math.max(x1, x);
         y0 = Math.min(y0, y);
@@ -36238,14 +36216,14 @@ void main() {
         z1 = Math.max(z1, z);
       }
       const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-      const slabs = solids.filter((s) => /slab/.test(s.list) || /slab/.test(s.material));
-      const floorTop = Math.max(...(slabs.length ? slabs : solids).map((s) => Number.isFinite(s.top) ? s.top : -Infinity), slabs.length ? -Infinity : z1);
-      const groundY = (Number.isFinite(floorTop) ? floorTop : z1) - GROUND_BELOW_FLOOR;
+      const slabs = solids.filter((s) => s.category === "slab" || /slab/.test(s.list));
+      const floorTop = slabs.length ? Math.max(...slabs.flatMap((s) => s.vertices.map((v) => v[2]))) : z1;
+      const groundY = floorTop - GROUND_BELOW_FLOOR;
       const root = new Group();
       const meshes = [], floorTris = [];
       let triangles = 0;
       for (const s of solids) {
-        const V = s.mesh.vertices_m, T = s.mesh.triangle_indices;
+        const V = s.vertices, T = s.faces;
         const pos = [], uv = [];
         const w = ([x, y, z]) => [x - cx, z, -(y - cy)];
         for (const tri of T) {
@@ -36270,10 +36248,10 @@ void main() {
         geo.setAttribute("uv", new Float32BufferAttribute(uv, 2));
         geo.computeVertexNormals();
         geo.computeBoundsTree();
-        const mesh = new Mesh(geo, materialFor(s.material, materials[s.material], usage.get(s.material)));
+        const mesh = new Mesh(geo, materialFor(s.material, materials[s.material], s.finish));
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        mesh.userData = { id: s.id, list: s.list, material: s.material, layer: s.layer, floor: /slab/.test(s.list) || /slab/.test(s.material) };
+        mesh.userData = { id: s.id, list: s.list, material: s.material, category: s.category, floor: s.category === "slab" };
         root.add(mesh);
         meshes.push(mesh);
       }
@@ -36350,8 +36328,8 @@ void main() {
       built = { root, meshes, reflector, floorTop, groundY, box, triangles, name, solids: solids.length };
       lastSunUpdate = -1;
       applyQuality();
-      modelName.textContent = `${name} \xB7 ${solids.length} solids \xB7 ${triangles} triangles${openings.length ? ` \xB7 ${openings.length} openings` : ""}`;
-      document.title = `${layers2[0].name} \xB7 Plan model`;
+      modelName.textContent = `${json.job || name} \xB7 ${solids.length} solids \xB7 ${triangles} triangles \xB7 ${openings.length} openings`;
+      document.title = `${json.job || name} \xB7 House model`;
       console.info(`[plan] model: ${solids.length} solids, ${triangles} triangles, floor at ${floorTop.toFixed(3)} m`);
       return built;
     }
@@ -36946,26 +36924,21 @@ void main() {
       button.addEventListener("pointerleave", release);
       button.addEventListener("contextmenu", (e) => e.preventDefault());
     }
-    const layers = [];
     function setStatus(text, error = false) {
       loadStatus.textContent = text;
       loadStatus.dataset.error = error ? "true" : "false";
     }
-    async function loadJson(json, name, { intro = true } = {}) {
+    async function loadJson(json, name) {
       if (mode === "walk") exitWalk();
       loading2.dataset.active = "true";
       await new Promise((r) => setTimeout(r, 30));
-      const kept = layers.filter((l) => l.name !== name);
       try {
-        buildModel([...kept, { name, json }]);
-        layers.length = 0;
-        layers.push(...kept, { name, json });
+        buildModel(json, name);
         loadPanel.hidden = true;
         openButton.hidden = false;
-        setStatus(`Loaded: ${layers.map((l) => l.name).join(", ")}`);
+        setStatus(`Loaded ${name}`);
         showHint(OVERVIEW_HINT);
-        if (intro) overviewIntro();
-        else fitOverview();
+        overviewIntro();
       } catch (err) {
         console.error("[plan] load failed", err);
         setStatus(`Cannot show ${name}: ${err.message}`, true);
@@ -36974,44 +36947,28 @@ void main() {
         loading2.dataset.active = "false";
       }
     }
-    async function loadFiles(files) {
-      let first = !built;
-      for (const file of files || []) {
-        setStatus(`Reading ${file.name}\u2026`);
-        try {
-          await loadJson(JSON.parse(await file.text()), file.name, { intro: first });
-          first = false;
-        } catch (err) {
-          setStatus(`Cannot read ${file.name}: ${err.message}`, true);
-        }
+    async function loadFile(file) {
+      if (!file) return;
+      setStatus(`Reading ${file.name}\u2026`);
+      try {
+        await loadJson(JSON.parse(await file.text()), file.name);
+      } catch (err) {
+        setStatus(`Cannot read ${file.name}: ${err.message}`, true);
       }
     }
     async function loadUrl(url) {
-      let first = !built;
-      for (const one of String(url).split(",").map((u) => u.trim()).filter(Boolean)) {
-        setStatus(`Loading ${one}\u2026`);
-        try {
-          const res = await fetch(one);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          await loadJson(await res.json(), one.split("/").pop() || one, { intro: first });
-          first = false;
-        } catch (err) {
-          setStatus(`Cannot load ${one}: ${err.message}`, true);
-          loadPanel.hidden = false;
-        }
+      setStatus(`Loading ${url}\u2026`);
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await loadJson(await res.json(), url.split("/").pop() || url);
+      } catch (err) {
+        setStatus(`Cannot load ${url}: ${err.message}`, true);
+        loadPanel.hidden = false;
       }
     }
-    function clearModel() {
-      if (mode === "walk") exitWalk();
-      layers.length = 0;
-      disposeBuilt();
-      modelName.textContent = "";
-      setStatus("");
-      openButton.hidden = true;
-      loadPanel.hidden = false;
-    }
     fileInput.addEventListener("change", () => {
-      loadFiles([...fileInput.files]);
+      loadFile(fileInput.files[0]);
       fileInput.value = "";
     });
     openButton.addEventListener("click", () => {
@@ -37020,7 +36977,6 @@ void main() {
     loadPanel.querySelector("[data-close]").addEventListener("click", () => {
       if (built) loadPanel.hidden = true;
     });
-    loadPanel.querySelector("[data-clear]").addEventListener("click", clearModel);
     window.addEventListener("dragover", (e) => {
       e.preventDefault();
       body.dataset.dragging = "true";
@@ -37031,7 +36987,7 @@ void main() {
     window.addEventListener("drop", (e) => {
       e.preventDefault();
       body.dataset.dragging = "false";
-      loadFiles([...e.dataTransfer.files]);
+      loadFile(e.dataTransfer.files[0]);
     });
     applyQuality();
     applyOrbit();
@@ -37040,7 +36996,7 @@ void main() {
     const src = new URLSearchParams(location.search).get("src");
     if (src) loadUrl(src);
     else setStatus("");
-    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, clear: clearModel, layers, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
+    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
       return mode;
     }, get player() {
       return player;

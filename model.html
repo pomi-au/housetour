@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#1c1e1d">
   <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
   <title>Plan Model Viewer</title>
-  <link rel="stylesheet" href="tour/css/tour.css?v=mtpyu2cx">
-  <link rel="stylesheet" href="tour/css/plan.css?v=mtpyu2cx">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtpzpxwa">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtpzpxwa">
 </head>
 <body data-tour-mode="overview">
   <!-- One three.js renderer draws both the bird's-eye overview and the walking view. -->
@@ -40,17 +40,16 @@
   <!-- Model loader: any JSON whose entries carry mesh.vertices_m and mesh.triangle_indices. -->
   <section id="plan-load" aria-label="Load a model">
     <h1>Plan model viewer</h1>
-    <p>Load the model JSON files of one job, together or one at a time: slab and footing (<code>005_01</code>), wall envelopes (<code>005_03</code>), roof envelope (<code>005_02</code>) and openings (<code>005_04a …_final_setout_2d_3d_B.json</code>, which cuts doors and windows into the walls). The model is shown from above; click a floor to walk on it.</p>
+    <p>Load a house model JSON (schema <code>pomi.house_model.v1</code>: slab, footing, walls, roof, doors and windows). The model is shown from above; click a floor to walk on it.</p>
     <label class="plan-pick">
-      <input id="plan-file" type="file" accept=".json,application/json" multiple>
-      <span>Choose JSON files</span>
+      <input id="plan-file" type="file" accept=".json,application/json">
+      <span>Choose the JSON file</span>
     </label>
-    <p class="plan-drop">or drop the files anywhere on this page · or open <code>model.html?src=slab.json,walls.json,roof.json</code></p>
+    <p class="plan-drop">or drop the file anywhere on this page · or open <code>model.html?src=path/to/house_model.json</code></p>
     <p id="plan-status" data-error="false"></p>
     <button type="button" data-close>Close</button>
-    <button type="button" data-clear>Clear model</button>
   </section>
 
-  <script src="tour/js/plan.bundle.js?v=mtpyu2cx"></script>
+  <script src="tour/js/plan.bundle.js?v=mtpzpxwa"></script>
 </body>
 </html>

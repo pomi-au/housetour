@@ -1,14 +1,9 @@
 /*
  * Plan model viewer (model.html).
  *
- * Loads building model JSON files and shows them the way tour.html shows the residence. Files can be combined:
- * slab and footing (foma.005_01, triangle meshes), wall envelopes (foma.005_03, triangle meshes per segment) and
- * the roof envelope (foma.005_02, planar underside surfaces and eave lines, built here into thin roof prisms and
- * fascia boards). Any file whose entries carry mesh.vertices_m / mesh.triangle_indices loads too. The view is
- * a bird's-eye overview that opens as a plan view and turns over into the isometric view, then a first-person
- * walk when a floor is clicked. Render settings, procedural textures, daylight, floor reflection, lawn, streets
- * and street lamps are the tour's; there is no neighbourhood.
- *
+ * Loads a house model JSON (schema pomi.house_model.v1: slab, footing, wall and roof elements as meshes, door
+ * and window fixtures, eave height lines) and shows it the way tour.html shows the residence. Walls are cut
+ * around the fixtures here, windows get glazing and eave lines get fascia boards. The view is
  * Coordinates: JSON x, y are plan metres, z is up. Here x -> x, z -> y, y -> -z, centred on the model footprint.
  * Build: cd tour/build && npm run build   ->  tour/js/plan.bundle.js
  */
@@ -198,10 +193,10 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     return new THREE.MeshStandardMaterial(p);
   }
   const materialCache = new Map();
-  function materialFor(key, spec, usage) {
-    const cacheKey = key + '|' + JSON.stringify(spec || null);
+  function materialFor(key, spec, finish) {
+    const cacheKey = key + '|' + (finish || '') + '|' + JSON.stringify(spec || null);
     if (materialCache.has(cacheKey)) return materialCache.get(cacheKey);
-    const family = `${spec?.library_material_family || ''} ${spec?.library_material_id || ''} ${usage?.semanticClass || ''} ${key}`.toLowerCase();
+    const family = `${finish || ''} ${spec?.library_material_family || ''} ${spec?.library_material_id || ''} ${key}`.toLowerCase();
     const rough = Number.isFinite(spec?.roughness) ? spec.roughness : null;
     const metal = Number.isFinite(spec?.metalness) ? spec.metalness : null;
     const common = { side: THREE.DoubleSide };   // JSON winding is not guaranteed; both faces light correctly
@@ -223,6 +218,10 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       m = surfaceMaterial({ ...common, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(bumpMap, 240, 0.9), bumpMap, bumpScale: 0.08 });
     } else if (/tile|ceramic|porcelain/.test(family)) {
       m = surfaceMaterial({ ...common, color: 0xdedbd4, roughness: rough ?? 0.18, metalness: 0, envMapIntensity: 0.6 });
+    } else if (/^render\b/.test(family)) {
+      // Rendered masonry: the tour's rendered-wall relief in a warm off-white.
+      const bumpMap = reliefTexture('render', 512, [[9000, 3, 120], [3000, 6, 90], [800, 14, 60]]);
+      m = surfaceMaterial({ ...common, color: 0xe9e4da, roughness: 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.10 });
     } else if (/brick|masonry|block/.test(family)) {
       const bumpMap = reliefTexture('render', 512, [[9000, 3, 120], [3000, 6, 90], [800, 14, 60]]);
       m = surfaceMaterial({ ...common, color: 0xa86a5a, roughness: rough ?? 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.10 });
@@ -241,41 +240,56 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     return m;
   }
 
-  // ---------------------------------------------------------------- model JSON -> meshes
-  // Every object in the file that carries a triangle mesh becomes one solid, whatever list it sits in.
-  // Openings (foma.005_04a final setout): the authoritative cut list, plan rectangles and vertical intervals in
-  // millimetres from the slab top. Each rectangle spans every leaf of its host wall.
-  function openingRects(json) {
-    const records = json.three_d_scene?.opening_cut_report?.opening_records || json.opening_cut_report?.opening_records || [];
+  // ---------------------------------------------------------------- house model JSON -> solids
+  // Schema pomi.house_model.v1: elements (slab, footing, wall, roof) as vertex/face meshes in plan metres with z
+  // up from the slab top, fixtures (doors and windows: centre, rotation, width, sill, head, depth) and guides
+  // (eave height lines). Walls arrive uncut: every wall a fixture crosses is rebuilt here as pieces around the
+  // opening, windows and sliding doors get glazing, and every eave line gets a fascia board.
+  const ROOF_SHEET = 0.05, FASCIA_DEPTH = 0.18, FASCIA_THICK = 0.03;
+  // A closed prism over a plan polygon (no holes) between two height functions, as a plan-frame mesh.
+  function prismSolid(id, list, material, contour, zTop, zBot, extra = {}) {
+    const pts = contour.map(([x, y]) => new THREE.Vector2(x, y));
+    if (THREE.ShapeUtils.isClockWise(pts)) pts.reverse();
+    const tris = THREE.ShapeUtils.triangulateShape(pts, []);
+    const n = pts.length, vertices = [], faces = [];
+    for (const p of pts) vertices.push([p.x, p.y, zTop(p.x, p.y)]);
+    for (const p of pts) vertices.push([p.x, p.y, zBot(p.x, p.y)]);
+    for (const [a, b, c] of tris) { faces.push([a, b, c]); faces.push([n + a, n + c, n + b]); }
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; faces.push([i, n + i, n + j]); faces.push([i, n + j, j]); }
+    return { id, list, material, vertices, faces, ...extra };
+  }
+  // Opening boxes from the fixtures: plan rectangle (width along the wall, depth across it) and sill..head.
+  function fixtureBoxes(json) {
     const out = [];
-    for (const r of records) {
-      const rect = r.rect_mm, v = r.vertical_mm;
-      if (!Array.isArray(rect) || rect.length !== 4 || !Array.isArray(v) || v.length !== 2) continue;
-      out.push({ id: r.cut_id || r.label, kind: r.kind || '', label: r.label || '',
-        x0: Math.min(rect[0], rect[2]) / 1000, x1: Math.max(rect[0], rect[2]) / 1000, y0: Math.min(rect[1], rect[3]) / 1000, y1: Math.max(rect[1], rect[3]) / 1000,
-        z0: Math.min(v[0], v[1]) / 1000, z1: Math.max(v[0], v[1]) / 1000 });
+    for (const f of json.fixtures || []) {
+      const [px, py] = f.position || [];
+      if (!Number.isFinite(px) || !Number.isFinite(py) || !(f.width_m > 0)) continue;
+      const alongX = Math.abs(((Number(f.rotation_deg) || 0) % 180)) < 45;
+      const w = f.width_m / 2, d = (f.depth_m > 0 ? f.depth_m : 0.3) / 2 + 0.02;
+      const sill = Number.isFinite(f.sill_m) ? f.sill_m : 0;
+      const head = Number.isFinite(f.head_m) ? f.head_m : sill + (f.height_m > 0 ? f.height_m : 2.1);
+      out.push({ id: f.id, kind: f.kind || '', label: f.label || '', alongX, cx: px, cy: py,
+        x0: px - (alongX ? w : d), x1: px + (alongX ? w : d), y0: py - (alongX ? d : w), y1: py + (alongX ? d : w), z0: sill, z1: head });
     }
     return out;
   }
-  // A wall segment crossed by openings is rebuilt from its plan rectangle and top profile as pieces around the
+  // A wall element crossed by openings is rebuilt from its plan rectangle and top edge as pieces around the
   // holes: full-height pieces between openings, a piece above each head and one below each sill.
-  function cutWallSegment(seg, id, material, openings) {
-    const ring = seg.geometry_model_xy_m?.coordinates?.[0];
-    const profile = seg.top_profile_model_xyz_m;
-    if (!Array.isArray(ring) || ring.length < 4 || !Array.isArray(profile) || !profile.length) return null;
-    let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
-    for (const [x, y] of ring) { px0 = Math.min(px0, x); px1 = Math.max(px1, x); py0 = Math.min(py0, y); py1 = Math.max(py1, y); }
-    const area = Math.abs(THREE.ShapeUtils.area(ring.map(([x, y]) => new THREE.Vector2(x, y))));
-    if (area < (px1 - px0) * (py1 - py0) * 0.97) return null;   // not a plain rectangle: keep the file's mesh
+  function cutWall(el, openings) {
+    const V = el.vertices;
+    let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity, bottom = Infinity;
+    for (const [x, y, z] of V) { px0 = Math.min(px0, x); px1 = Math.max(px1, x); py0 = Math.min(py0, y); py1 = Math.max(py1, y); bottom = Math.min(bottom, z); }
+    const eps = 0.002;
+    // Plain rectangular wall: every vertex sits on the rectangle's edges.
+    if (!V.every(([x, y]) => Math.abs(x - px0) < eps || Math.abs(x - px1) < eps || Math.abs(y - py0) < eps || Math.abs(y - py1) < eps)) return null;
     const alongX = (px1 - px0) >= (py1 - py0);
     const A0 = alongX ? px0 : py0, A1 = alongX ? px1 : py1, B0 = alongX ? py0 : px0, B1 = alongX ? py1 : px1;
-    const bottom = Number(seg.bottom_z_m) || 0;
     const cuts = [];
     for (const o of openings) {
       const ox0 = Math.max(px0, o.x0), ox1 = Math.min(px1, o.x1), oy0 = Math.max(py0, o.y0), oy1 = Math.min(py1, o.y1);
       if (ox1 - ox0 < 0.005 || oy1 - oy0 < 0.005) continue;
       const across = alongX ? oy1 - oy0 : ox1 - ox0;
-      if (across < (B1 - B0) * 0.5) continue;                  // clips a corner only: not a hole through this leaf
+      if (across < (B1 - B0) * 0.5) continue;                  // clips a corner only: not a hole through this wall
       cuts.push({ a0: alongX ? ox0 : oy0, a1: alongX ? ox1 : oy1, z0: o.z0, z1: o.z1 });
     }
     if (!cuts.length) return null;
@@ -286,8 +300,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       if (last && c.a0 < last.a1 - 0.001) { last.a1 = Math.max(last.a1, c.a1); last.z0 = Math.min(last.z0, c.z0); last.z1 = Math.max(last.z1, c.z1); }
       else merged.push({ ...c });
     }
-    // Top of the wall along its axis, from the file's top profile (the eave or plate line).
-    const pts = profile.map(p => [alongX ? p[0] : p[1], p[2]]).sort((p, q) => p[0] - q[0]);
+    // Top of the wall along its axis, from the element's upper vertices (the eave, plate or raking line).
+    const pts = V.filter(v => v[2] > bottom + 0.01).map(v => [alongX ? v[0] : v[1], v[2]]).sort((p, q) => p[0] - q[0]);
+    if (!pts.length) return null;
     const zTop = (x, y) => {
       const t = alongX ? x : y;
       if (t <= pts[0][0]) return pts[0][1];
@@ -298,7 +313,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const rect = (a0, a1) => alongX ? [[a0, B0], [a1, B0], [a1, B1], [a0, B1]] : [[B0, a0], [B1, a0], [B1, a1], [B0, a1]];
     const pieces = [];
     let n = 0;
-    const piece = (a0, a1, zLo, zHi) => { if (a1 - a0 > 0.002) pieces.push(prismSolid(`${id}-${++n}`, 'wall_envelopes.cut', material, rect(a0, a1), zHi || zTop, () => zLo)); };
+    const extra = { category: el.category, role: el.role, finish: el.finish };
+    const piece = (a0, a1, zLo, zHi) => { if (a1 - a0 > 0.002) pieces.push(prismSolid(`${el.id}-${++n}`, 'wall.cut', el.material, rect(a0, a1), zHi || zTop, () => zLo, extra)); };
     let cursor = A0;
     for (const c of merged) {
       if (c.a0 > cursor + 0.001) piece(cursor, c.a0, bottom);
@@ -309,70 +325,35 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (cursor < A1 - 0.001) piece(cursor, A1, bottom);
     return pieces;
   }
-  // Glazing in every window and sliding door opening: one pane at the centre of the wall.
-  function glazingSolids(openings) {
-    return openings.filter(o => /window|sliding|glass/.test(o.kind)).map(o => {
-      const alongX = (o.x1 - o.x0) >= (o.y1 - o.y0);
-      const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2, t = 0.003;
-      const contour = alongX ? [[o.x0, cy - t], [o.x1, cy - t], [o.x1, cy + t], [o.x0, cy + t]] : [[cx - t, o.y0], [cx + t, o.y0], [cx + t, o.y1], [cx - t, o.y1]];
-      return prismSolid(`${o.id}-glass`, 'openings.glazing', 'window_glass', contour, () => o.z1, () => o.z0);
-    });
-  }
-  // A wall segment carries no material of its own: the key is inherited from the enclosing wall envelope.
-  function collectSolids(json, openings = []) {
+  function houseSolids(json) {
+    if (!Array.isArray(json.elements)) throw new Error('not a house model: no elements list (expected schema pomi.house_model.v1)');
+    const openings = fixtureBoxes(json);
     const out = [];
-    const visit = (node, path, material) => {
-      if (Array.isArray(node)) { node.forEach(n => visit(n, path, material)); return; }
-      if (!node || typeof node !== 'object') return;
-      const mat = node.material_key || material;
-      const mesh = node.mesh;
-      if (mesh && Array.isArray(mesh.vertices_m) && Array.isArray(mesh.triangle_indices)) {
-        const id = node.slab_id || node.footing_id || node.segment_id || node.wall_leaf_id || node.component_id || node.id || path;
-        const cut = openings.length && node.top_profile_model_xyz_m ? cutWallSegment(node, id, mat || 'default', openings) : null;
-        if (cut) { out.push(...cut); return; }
-        out.push({ id, list: path, material: mat || 'default', mesh, top: node.top_z_m, bottom: node.bottom_z_m });
-        return;
-      }
-      for (const [k, v] of Object.entries(node)) if (k !== 'inputs' && k !== 'material_library' && k !== 'artifacts' && k !== 'three_d_scene') visit(v, path ? `${path}.${k}` : k, mat);
-    };
-    visit(json, '', null);
-    return out.concat(roofSolids(json));
-  }
-  // A closed prism over a plan polygon (no holes) between two height functions, as a JSON-frame mesh.
-  function prismSolid(id, list, material, contour, zTop, zBot) {
-    const pts = contour.map(([x, y]) => new THREE.Vector2(x, y));
-    if (THREE.ShapeUtils.isClockWise(pts)) pts.reverse();
-    const tris = THREE.ShapeUtils.triangulateShape(pts, []);
-    const n = pts.length, vertices_m = [], triangle_indices = [];
-    for (const p of pts) vertices_m.push([p.x, p.y, zTop(p.x, p.y)]);
-    for (const p of pts) vertices_m.push([p.x, p.y, zBot(p.x, p.y)]);
-    for (const [a, b, c] of tris) { triangle_indices.push([a, b, c]); triangle_indices.push([n + a, n + c, n + b]); }
-    for (let i = 0; i < n; i++) { const j = (i + 1) % n; triangle_indices.push([i, n + i, n + j]); triangle_indices.push([i, n + j, j]); }
-    return { id, list, material, mesh: { vertices_m, triangle_indices } };
-  }
-  // Roof envelope (foma.005_02): each underside surface is a plane z = gx*x + gy*y + intercept over its outline.
-  // The sheet is drawn as a 50 mm prism on that plane; every eave height line gets a fascia board.
-  const ROOF_SHEET = 0.05, FASCIA_DEPTH = 0.18, FASCIA_THICK = 0.03;
-  function roofSolids(json) {
-    const out = [];
-    for (const sf of json.roof_underside_envelope?.surfaces || []) {
-      const poly = sf.polygon_model_xy_m;
-      if (!Array.isArray(poly) || poly.length < 3 || !Array.isArray(sf.gradient_xy)) continue;
-      const [gx, gy] = sf.gradient_xy, c = Number(sf.intercept) || 0, nz = Number(sf.normal_z) || 1, thk = Number(sf.sheet_thickness_m) || 0;
-      const under = (x, y) => gx * x + gy * y + c - nz * thk;
-      out.push(prismSolid(sf.surface_id || 'roof', 'roof_underside_envelope.surfaces', 'roof_sheet', poly, (x, y) => under(x, y) + ROOF_SHEET, under));
+    for (const el of json.elements) {
+      if (!Array.isArray(el.vertices) || !Array.isArray(el.faces)) continue;
+      const cut = el.category === 'wall' && openings.length ? cutWall(el, openings) : null;
+      if (cut) { out.push(...cut); continue; }
+      out.push({ id: el.id, list: el.category || 'element', material: el.material || 'default', vertices: el.vertices, faces: el.faces, category: el.category, role: el.role, finish: el.finish });
     }
-    for (const e of json.eave_height_lines || []) {
-      const seg = e.segment_model_xyz_m;
-      if (!Array.isArray(seg) || seg.length !== 2) continue;
-      const [a, b] = seg, dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+    // Glazing: one pane at the centre of every window and sliding door.
+    for (const o of openings) {
+      if (!/window|sliding|glass/.test(o.kind)) continue;
+      const t = 0.003;
+      const contour = o.alongX ? [[o.x0, o.cy - t], [o.x1, o.cy - t], [o.x1, o.cy + t], [o.x0, o.cy + t]] : [[o.cx - t, o.y0], [o.cx + t, o.y0], [o.cx + t, o.y1], [o.cx - t, o.y1]];
+      out.push(prismSolid(`${o.id}-glass`, 'glazing', 'window_glass', contour, () => o.z1, () => o.z0));
+    }
+    // Fascia boards along the eave height lines.
+    for (const e of json.guides?.eave_height_lines || []) {
+      const a = e.start, b = e.end;
+      if (!Array.isArray(a) || !Array.isArray(b)) continue;
+      const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
       if (len < 1e-4) continue;
       const nx = -dy / len * FASCIA_THICK / 2, ny = dx / len * FASCIA_THICK / 2;
       const contour = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
       const zAt = (x, y) => a[2] + (b[2] - a[2]) * ((x - a[0]) * dx + (y - a[1]) * dy) / (len * len);
-      out.push(prismSolid(e.eave_height_line_id || 'eave', 'eave_height_lines', 'fascia', contour, (x, y) => zAt(x, y) + 0.02, (x, y) => zAt(x, y) - FASCIA_DEPTH));
+      out.push(prismSolid(e.id || 'eave', 'fascia', 'fascia', contour, (x, y) => zAt(x, y) + 0.02, (x, y) => zAt(x, y) - FASCIA_DEPTH));
     }
-    return out;
+    return { solids: out, openings };
   }
 
   // ---------------------------------------------------------------- static world: sky, sun, lawn, streets
@@ -471,32 +452,24 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     built = null;
   }
 
-  function buildModel(layers) {
-    const openings = layers.flatMap(l => openingRects(l.json));
-    const solids = layers.flatMap(l => collectSolids(l.json, openings).map(s => ({ ...s, layer: l.name })));
-    solids.push(...glazingSolids(openings).map(s => ({ ...s, layer: 'openings' })));
-    if (!solids.length) {
-      const stage = layers[layers.length - 1].json;
-      if (/^foma\.005_04\./.test(stage.schema || '') && !openingRects(stage).length) throw new Error('this index file has no geometry; load the 005_04a …_final_setout_2d_3d_B.json file, which holds the opening cut list');
-      throw new Error('No mesh, roof surface, eave line or opening found');
-    }
-    const name = layers.map(l => l.name).join(' + ');
-    const materials = Object.assign({}, ...layers.map(l => l.json.materials || {}));
-    const usage = new Map(layers.flatMap(l => l.json.material_library?.materialUsage || []).map(u => [u.materialKey, u]));
+  function buildModel(json, name) {
+    const { solids, openings } = houseSolids(json);
+    if (!solids.length) throw new Error('No element with vertices and faces found');
+    const materials = json.materials || {};
     disposeBuilt();
     // Footprint centre in plan, so the model sits on the origin of the lawn and streets.
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (const s of solids) for (const [x, y, z] of s.mesh.vertices_m) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    for (const s of solids) for (const [x, y, z] of s.vertices) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
     const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
     // Floor level: the highest slab top in the file (the walkable surface), else the top of everything.
-    const slabs = solids.filter(s => /slab/.test(s.list) || /slab/.test(s.material));
-    const floorTop = Math.max(...(slabs.length ? slabs : solids).map(s => Number.isFinite(s.top) ? s.top : -Infinity), slabs.length ? -Infinity : z1);
-    const groundY = (Number.isFinite(floorTop) ? floorTop : z1) - GROUND_BELOW_FLOOR;
+    const slabs = solids.filter(s => s.category === 'slab' || /slab/.test(s.list));
+    const floorTop = slabs.length ? Math.max(...slabs.flatMap(s => s.vertices.map(v => v[2]))) : z1;
+    const groundY = floorTop - GROUND_BELOW_FLOOR;
     const root = new THREE.Group();
     const meshes = [], floorTris = [];
     let triangles = 0;
     for (const s of solids) {
-      const V = s.mesh.vertices_m, T = s.mesh.triangle_indices;
+      const V = s.vertices, T = s.faces;
       const pos = [], uv = [];
       const w = ([x, y, z]) => [x - cx, z, -(y - cy)];   // plan (x, y) with z up -> three.js (x, y up, z)
       for (const tri of T) {
@@ -521,9 +494,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       geo.computeVertexNormals();   // non-indexed: flat face normals
       geo.computeBoundsTree();
-      const mesh = new THREE.Mesh(geo, materialFor(s.material, materials[s.material], usage.get(s.material)));
+      const mesh = new THREE.Mesh(geo, materialFor(s.material, materials[s.material], s.finish));
       mesh.castShadow = true; mesh.receiveShadow = true;
-      mesh.userData = { id: s.id, list: s.list, material: s.material, layer: s.layer, floor: /slab/.test(s.list) || /slab/.test(s.material) };
+      mesh.userData = { id: s.id, list: s.list, material: s.material, category: s.category, floor: s.category === 'slab' };
       root.add(mesh); meshes.push(mesh);
     }
 
@@ -597,8 +570,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     built = { root, meshes, reflector, floorTop, groundY, box, triangles, name, solids: solids.length };
     lastSunUpdate = -1;
     applyQuality();
-    modelName.textContent = `${name} · ${solids.length} solids · ${triangles} triangles${openings.length ? ` · ${openings.length} openings` : ''}`;
-    document.title = `${layers[0].name} · Plan model`;
+    modelName.textContent = `${json.job || name} · ${solids.length} solids · ${triangles} triangles · ${openings.length} openings`;
+    document.title = `${json.job || name} · House model`;
     console.info(`[plan] model: ${solids.length} solids, ${triangles} triangles, floor at ${floorTop.toFixed(3)} m`);
     return built;
   }
@@ -1030,56 +1003,41 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   // ---------------------------------------------------------------- loading
-  // Layers: every loaded file adds to the model (slab, walls, roof), rebuilt together so they share one centre.
-  const layers = [];
   function setStatus(text, error = false) { loadStatus.textContent = text; loadStatus.dataset.error = error ? 'true' : 'false'; }
-  async function loadJson(json, name, { intro = true } = {}) {
+  async function loadJson(json, name) {
     if (mode === 'walk') exitWalk();
     loading.dataset.active = 'true';
     await new Promise(r => setTimeout(r, 30));
-    const kept = layers.filter(l => l.name !== name);
     try {
-      buildModel([...kept, { name, json }]);
-      layers.length = 0; layers.push(...kept, { name, json });
+      buildModel(json, name);
       loadPanel.hidden = true;
       openButton.hidden = false;
-      setStatus(`Loaded: ${layers.map(l => l.name).join(', ')}`);
+      setStatus(`Loaded ${name}`);
       showHint(OVERVIEW_HINT);
-      if (intro) overviewIntro(); else fitOverview();
+      overviewIntro();
     } catch (err) {
       console.error('[plan] load failed', err);
       setStatus(`Cannot show ${name}: ${err.message}`, true);
       loadPanel.hidden = false;
     } finally { loading.dataset.active = 'false'; }
   }
-  async function loadFiles(files) {
-    let first = !built;
-    for (const file of files || []) {
-      setStatus(`Reading ${file.name}…`);
-      try { await loadJson(JSON.parse(await file.text()), file.name, { intro: first }); first = false; }
-      catch (err) { setStatus(`Cannot read ${file.name}: ${err.message}`, true); }
-    }
+  async function loadFile(file) {
+    if (!file) return;
+    setStatus(`Reading ${file.name}…`);
+    try { await loadJson(JSON.parse(await file.text()), file.name); }
+    catch (err) { setStatus(`Cannot read ${file.name}: ${err.message}`, true); }
   }
   async function loadUrl(url) {
-    let first = !built;
-    for (const one of String(url).split(',').map(u => u.trim()).filter(Boolean)) {
-      setStatus(`Loading ${one}…`);
-      try { const res = await fetch(one); if (!res.ok) throw new Error(`HTTP ${res.status}`); await loadJson(await res.json(), one.split('/').pop() || one, { intro: first }); first = false; }
-      catch (err) { setStatus(`Cannot load ${one}: ${err.message}`, true); loadPanel.hidden = false; }
-    }
+    setStatus(`Loading ${url}…`);
+    try { const res = await fetch(url); if (!res.ok) throw new Error(`HTTP ${res.status}`); await loadJson(await res.json(), url.split('/').pop() || url); }
+    catch (err) { setStatus(`Cannot load ${url}: ${err.message}`, true); loadPanel.hidden = false; }
   }
-  function clearModel() {
-    if (mode === 'walk') exitWalk();
-    layers.length = 0; disposeBuilt();
-    modelName.textContent = ''; setStatus(''); openButton.hidden = true; loadPanel.hidden = false;
-  }
-  fileInput.addEventListener('change', () => { loadFiles([...fileInput.files]); fileInput.value = ''; });
+  fileInput.addEventListener('change', () => { loadFile(fileInput.files[0]); fileInput.value = ''; });
   openButton.addEventListener('click', () => { loadPanel.hidden = false; });
   loadPanel.querySelector('[data-close]').addEventListener('click', () => { if (built) loadPanel.hidden = true; });
-  loadPanel.querySelector('[data-clear]').addEventListener('click', clearModel);
   window.addEventListener('dragover', e => { e.preventDefault(); body.dataset.dragging = 'true'; });
   window.addEventListener('dragleave', e => { if (!e.relatedTarget) body.dataset.dragging = 'false'; });
-  window.addEventListener('drop', e => { e.preventDefault(); body.dataset.dragging = 'false'; loadFiles([...e.dataTransfer.files]); });
+  window.addEventListener('drop', e => { e.preventDefault(); body.dataset.dragging = 'false'; loadFile(e.dataTransfer.files[0]); });
 
   // ---------------------------------------------------------------- start
   applyQuality();
@@ -1089,5 +1047,5 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const src = new URLSearchParams(location.search).get('src');
   if (src) loadUrl(src); else setStatus('');
 
-  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, clear: clearModel, layers, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
+  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
 })();

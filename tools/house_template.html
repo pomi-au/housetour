@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>House Model Viewer</title>
+<style>
+:root{--bg:#f3f1ec;--panel:#ffffffee;--fg:#1f1f1f;--muted:#6b6b6b;--line:#dcd8d0}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,Segoe UI,Helvetica,Arial,sans-serif}
+#c{display:block;width:100%;height:100%}
+#panel{position:fixed;top:12px;left:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:220px;backdrop-filter:blur(6px)}
+#panel h1{font-size:15px;margin:0 0 6px}
+#panel .sub{color:var(--muted);font-size:12px;margin-bottom:8px}
+#panel label{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer}
+#panel .sw{width:12px;height:12px;border-radius:2px;border:1px solid #0002}
+#panel .n{margin-left:auto;color:var(--muted);font-size:12px}
+#panel button{margin-top:8px;padding:4px 10px;font-size:12px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+#drop{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:16px;pointer-events:none}
+#drop[hidden]{display:none}
+#info{position:fixed;bottom:12px;left:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--muted);max-width:60vw}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="panel"><h1 id="title">House Model Viewer</h1><div class="sub" id="sub">pomi.house_model.v1</div><div id="layers"></div><button id="reset">Reset view</button> <button id="load">Load JSON…</button><input type="file" id="file" accept=".json,application/json" hidden></div>
+<div id="drop">Drop a house model JSON here, use Load JSON…, or open with ?model=&lt;url&gt;</div>
+<div id="info">Drag to orbit. Scroll to zoom. Right-drag to pan. Hover an element or fixture.</div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script id="data" type="application/json">DATA_JSON</script>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0xf3f1ec);
+const camera=new THREE.PerspectiveCamera(45,1,0.1,500);
+const controls=new OrbitControls(camera,canvas); controls.enableDamping=true;
+// Model frame: X east, Y north, Z up. Three.js is Y up: rotate the whole model group.
+const model=new THREE.Group(); model.rotation.x=-Math.PI/2; scene.add(model);
+scene.add(new THREE.HemisphereLight(0xffffff,0x998877,0.9));
+const sun=new THREE.DirectionalLight(0xffffff,1.4); sun.position.set(30,60,20); sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048); scene.add(sun);
+
+// ---- layer / material table (layer key = category for slab/footing/roof, material for walls, kind group for fixtures)
+const LAYERS={
+ slab:{color:0xb9b6ad,name:'Slab'}, footing:{color:0x8d8a82,name:'Footing'},
+ common_brick:{color:0xc9a27e,name:'Common brick'}, clear_brick:{color:0xa8543a,name:'Face brick'}, steel_wall:{color:0x7f93a8,name:'Steel frame'},
+ wall_other:{color:0xbfb8a8,name:'Other wall'}, roof:{color:0x5c6670,name:'Roof'},
+ door:{color:0x6e4a2f,name:'Doors'}, window:{color:0x7fb7d6,name:'Windows'}, eaves:{color:0xd8452b,name:'Eave height lines'}};
+const mats={}; for(const k in LAYERS) mats[k]=new THREE.MeshStandardMaterial({color:LAYERS[k].color,roughness:0.85,metalness:k==='steel_wall'?0.35:0,side:THREE.DoubleSide});
+mats.glass=new THREE.MeshPhysicalMaterial({color:0x9fd0ea,transparent:true,opacity:0.45,roughness:0.1,metalness:0.1,side:THREE.DoubleSide});
+mats.frame=new THREE.MeshStandardMaterial({color:0xf2f2f0,roughness:0.6});
+mats.sill=new THREE.MeshStandardMaterial({color:0xd9d4c8,roughness:0.8});
+mats.handle=new THREE.MeshStandardMaterial({color:0xcfcfcf,roughness:0.3,metalness:0.8});
+function layer(k){ if(!layers[k]){layers[k]=new THREE.Group(); layers[k].name=k; model.add(layers[k]); counts[k]=0;} return layers[k]; }
+
+let layers={}, counts={};
+function clearModel(){ for(const k in layers) model.remove(layers[k]); layers={}; counts={}; document.getElementById('layers').innerHTML=''; }
+function render(D){
+ clearModel();
+ document.getElementById('title').textContent=D.job||'House model';
+ document.getElementById('sub').textContent=`${D.schema||''} · ${D.counts?D.counts.elements+' elements, '+D.counts.fixtures+' fixtures':''}`;
+ document.getElementById('drop').hidden=true;
+// ---- elements: generic triangle meshes
+for(const el of D.elements){
+ const key=el.category==='wall'?(el.material in mats?el.material:'wall_other'):el.category;
+ const g=new THREE.BufferGeometry();
+ g.setAttribute('position',new THREE.Float32BufferAttribute(el.vertices.flat(),3));
+ g.setIndex(el.faces.flat()); g.computeVertexNormals();
+ const m=new THREE.Mesh(g,mats[key]); m.castShadow=m.receiveShadow=true;
+ m.userData={text:[el.id,el.category,el.material,el.finish?'finish: '+el.finish:'',el.role||''].filter(Boolean).join('  ·  ')};
+ layer(key).add(m); counts[key]++;
+}
+
+// ---- fixtures: predefined models placed by position / rotation / size
+// Local frame: opening runs along +x (width), wall thickness along y (depth), z up from sill.
+const FRAME=0.06, SILL_T=0.045, SILL_OUT=0.04, PROUD=0.03;
+function bx(w,d,h,mat,cx,cy,cz){const m=new THREE.Mesh(new THREE.BoxGeometry(w,d,h),mat); m.position.set(cx,cy,cz); m.castShadow=m.receiveShadow=true; return m;}
+const FIXTURE_MODELS={
+ hinged_door(f){const g=new THREE.Group(); const W=f.width_m,Dp=f.depth_m+2*PROUD,H=f.height_m;
+  g.add(bx(FRAME,Dp,H,mats.frame,-W/2+FRAME/2,0,H/2)); g.add(bx(FRAME,Dp,H,mats.frame,W/2-FRAME/2,0,H/2)); g.add(bx(W,Dp,FRAME,mats.frame,0,0,H-FRAME/2));
+  g.add(bx(W-2*FRAME,0.04,H-FRAME-0.01,mats.door,0,0,(H-FRAME)/2));
+  const hx=(f.hinge==='L'?1:-1)*(W/2-FRAME-0.08); g.add(bx(0.03,0.12,0.03,mats.handle,hx,0,1.0)); return g;},
+ sliding_door(f){const g=new THREE.Group(); const W=f.width_m,Dp=f.depth_m+2*PROUD,H=f.height_m;
+  g.add(bx(FRAME,Dp,H,mats.frame,-W/2+FRAME/2,0,H/2)); g.add(bx(FRAME,Dp,H,mats.frame,W/2-FRAME/2,0,H/2)); g.add(bx(W,Dp,FRAME,mats.frame,0,0,H-FRAME/2));
+  g.add(bx(W/2-FRAME,0.02,H-FRAME,mats.glass,-W/4+FRAME/2,-0.02,(H-FRAME)/2)); g.add(bx(W/2-FRAME,0.02,H-FRAME,mats.glass,W/4-FRAME/2,0.02,(H-FRAME)/2));
+  g.add(bx(0.04,0.03,H-FRAME,mats.frame,0,0,(H-FRAME)/2)); return g;},
+ window_openable(f){const g=this.window_fixed(f); const W=f.width_m,H=f.height_m; g.add(bx(0.03,0.03,H-2*FRAME,mats.frame,0,0,H/2)); return g;},
+ window_fixed(f){const g=new THREE.Group(); const W=f.width_m,Dp=f.depth_m+2*PROUD,H=f.height_m;
+  g.add(bx(FRAME,Dp,H,mats.frame,-W/2+FRAME/2,0,H/2)); g.add(bx(FRAME,Dp,H,mats.frame,W/2-FRAME/2,0,H/2));
+  g.add(bx(W,Dp,FRAME,mats.frame,0,0,H-FRAME/2)); g.add(bx(W,Dp,FRAME,mats.frame,0,0,FRAME/2));
+  g.add(bx(W-2*FRAME,0.02,H-2*FRAME,mats.glass,0,0,H/2));
+  if(f.sill_m>0.001) g.add(bx(W,Dp+2*SILL_OUT,SILL_T,mats.sill,0,0,-SILL_T/2)); return g;}
+};
+for(const f of D.fixtures){
+ const build=FIXTURE_MODELS[f.kind]||FIXTURE_MODELS.window_fixed;
+ const g=build.call(FIXTURE_MODELS,f);
+ g.position.set(f.position[0],f.position[1],f.position[2]); g.rotation.z=f.rotation_deg*Math.PI/180;
+ const text=`${f.label}  ·  ${f.kind}${f.hinge?' hinge '+f.hinge:''}  ·  ${(f.width_m*1000)|0} x ${(f.height_m*1000)|0} mm  ·  sill ${(f.sill_m*1000)|0}, head ${(f.head_m*1000)|0} mm (${f.height_source})`;
+ g.traverse(o=>{ if(o.isMesh) o.userData={text}; });
+ const key=f.kind.includes('door')?'door':'window'; layer(key).add(g); counts[key]++;
+}
+
+// ---- guides
+if(D.guides&&D.guides.eave_height_lines){ const ev=[]; D.guides.eave_height_lines.forEach(e=>ev.push(...e.start,...e.end));
+ const eg=new THREE.BufferGeometry(); eg.setAttribute('position',new THREE.Float32BufferAttribute(ev,3));
+ layer('eaves').add(new THREE.LineSegments(eg,new THREE.LineBasicMaterial({color:LAYERS.eaves.color}))); counts.eaves=D.guides.eave_height_lines.length; }
+
+// ---- ground, panel, camera, hover
+const bbox=new THREE.Box3().setFromObject(model); const ctr=bbox.getCenter(new THREE.Vector3()); const size=bbox.getSize(new THREE.Vector3());
+if(scene.userData.ground){scene.remove(scene.userData.ground);scene.remove(scene.userData.grid);}
+ const ground=new THREE.Mesh(new THREE.PlaneGeometry(size.x*4,size.z*4),new THREE.ShadowMaterial({opacity:0.18}));
+ground.rotation.x=-Math.PI/2; ground.position.set(ctr.x,bbox.min.y-0.001,ctr.z); ground.receiveShadow=true; scene.add(ground);
+const grid=new THREE.GridHelper(Math.max(size.x,size.z)*2,Math.round(Math.max(size.x,size.z)*2),0xcfcbc2,0xe4e0d8); grid.position.set(ctr.x,bbox.min.y-0.002,ctr.z); scene.add(grid); scene.userData.ground=ground; scene.userData.grid=grid;
+const panel=document.getElementById('layers');
+Object.keys(LAYERS).forEach(k=>{ if(!layers[k]) return;
+ const l=document.createElement('label'); l.innerHTML=`<input type="checkbox" checked><span class="sw" style="background:#${LAYERS[k].color.toString(16).padStart(6,'0')}"></span>${LAYERS[k].name}<span class="n">${counts[k]}</span>`;
+ l.querySelector('input').onchange=e=>{layers[k].visible=e.target.checked;}; panel.appendChild(l);});
+window.resetView=function(){const r=Math.max(size.x,size.z); camera.position.set(ctr.x+r*0.9,bbox.max.y+r*0.7,ctr.z+r*0.9); controls.target.copy(ctr); controls.update();}
+resetView();
+}
+// ---- model loading: embedded data, ?model=<url>, file picker, drag & drop
+const dataEl=document.getElementById('data'); const embedded=dataEl.textContent.trim();
+const qs=new URLSearchParams(location.search);
+if(embedded.length>2){ render(JSON.parse(embedded)); }
+else if(qs.get('model')){ fetch(qs.get('model')).then(r=>r.json()).then(render).catch(e=>{document.getElementById('drop').textContent='Could not load '+qs.get('model')+': '+e;}); }
+const fileEl=document.getElementById('file');
+document.getElementById('load').onclick=()=>fileEl.click();
+fileEl.onchange=()=>{ const f=fileEl.files[0]; if(f) f.text().then(t=>render(JSON.parse(t))); };
+addEventListener('dragover',e=>{e.preventDefault();}); addEventListener('drop',e=>{e.preventDefault(); const f=e.dataTransfer.files[0]; if(f) f.text().then(t=>render(JSON.parse(t)));});
+const ray=new THREE.Raycaster(); const mouse=new THREE.Vector2(); const info=document.getElementById('info'); let hover=null;
+const DEFAULT=info.textContent;
+canvas.addEventListener('pointermove',e=>{mouse.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);
+ ray.setFromCamera(mouse,camera); const meshes=[]; model.traverse(o=>{ if(o.isMesh&&o.parent.visible) meshes.push(o); });
+ const hits=ray.intersectObjects(meshes,false);
+ if(hover){hover.material=hover.userData._m; hover=null;}
+ if(hits.length){hover=hits[0].object; hover.userData._m=hover.material; hover.material=hover.material.clone(); hover.material.emissive=new THREE.Color(0x333333); info.textContent=hover.userData.text||'';}
+ else info.textContent=DEFAULT;});
+function resize(){const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();}
+addEventListener('resize',resize); resize();
+document.getElementById('reset').onclick=()=>window.resetView&&window.resetView();
+renderer.setAnimationLoop(()=>{controls.update(); renderer.render(scene,camera);});
+</script></body></html>
