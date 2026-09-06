@@ -309,3 +309,121 @@ export function buildDownlightFixtures(lights, frame) {
   for (const o of [bezel, lens, trim]) o.raycast = () => {};
   return { bezel, lens, trim };
 }
+
+// ---------------------------------------------------------------- baked light maps (mapped mode)
+// The downlights rendered once into HDR light maps: a ceiling map and a floor map over the footprint (top-down,
+// world metres), and one map per wall piece (along the wall by height). The same physics as the run-time lights:
+// spot cone with penumbra and range, halo point light, inverse-square falloff, cosine of incidence, and the room
+// mask (a texel only sees lights whose boxes contain it). Textures are float RGBA, linear, on the mesh's own
+// world-metre UVs through the map transform, so no second UV set is needed.
+const SPOT = { angle: THREE.MathUtils.degToRad(55), penumbra: 0.36, range: 6.5, haloRange: 5.0, haloDrop: 0.06 };
+function attenuation(d, range) {
+  const d2 = Math.max(d * d, 1e-4);
+  const f = Math.max(0, 1 - Math.pow(d / range, 4));
+  return f * f / d2;
+}
+function smoothstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+// Irradiance at a point with normal n from every light that can see it (boxes), for surface scale `scale`.
+function irradianceAt(px, py, pz, nx, ny, nz, leds, power, halo, scale) {
+  let e = 0;
+  const coneCos = Math.cos(SPOT.angle), penumbraCos = Math.cos(SPOT.angle * (1 - SPOT.penumbra));
+  for (const l of leds) {
+    if (py < l.yLo || py > l.yHi || !l.boxes.some(b => px >= b[0] && px <= b[2] && pz >= b[1] && pz <= b[3])) continue;
+    const [lx, ly, lz] = l.world;
+    // Spot: aimed straight down.
+    let dx = px - lx, dy = py - ly, dz = pz - lz, d = Math.hypot(dx, dy, dz);
+    if (d > 1e-3 && d < SPOT.range) {
+      const cosA = -dy / d;   // angle from the down axis
+      const dotNL = -(dx * nx + dy * ny + dz * nz) / d;
+      if (dotNL > 0 && cosA > coneCos) e += power * scale * attenuation(d, SPOT.range) * smoothstep(coneCos, penumbraCos, cosA) * dotNL;
+    }
+    // Halo point light just below the fitting.
+    dy = py - (ly - SPOT.haloDrop); d = Math.hypot(dx, dy, dz);
+    if (d > 1e-3 && d < SPOT.haloRange) {
+      const dotNL = -(dx * nx + dy * ny + dz * nz) / d;
+      if (dotNL > 0) e += power * halo * attenuation(d, SPOT.haloRange) * dotNL;
+    }
+  }
+  return e;
+}
+function floatTexture(w, h, fill) {
+  const data = new Float32Array(w * h * 4);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const e = fill(i, j), k = (j * w + i) * 4;
+    data[k] = e; data[k + 1] = e * 0.90; data[k + 2] = e * 0.76; data[k + 3] = 1;   // the fixtures' warm white
+  }
+  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+  t.colorSpace = THREE.NoColorSpace; t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.channel = 0; t.needsUpdate = true;
+  return t;
+}
+// Bake for a model: `meshes` are the built surface meshes (userData.category slab | ceiling | wall), `leds` the
+// light records ({ world, boxes, yLo, yHi }). Returns { maps, apply(on) }: apply swaps in cloned materials with the
+// maps (on) or restores the originals (off). `power`, `halo`, `floorScale`, `wallScale` are the tune values baked.
+export function bakeLightMaps(meshes, leds, { power = 9, halo = 0.15, floorScale = 0.6, wallScale = 1.0, texel = 0.04, wallTexel = 0.06, extraMeshes = [] } = {}) {
+  const box = new THREE.Box3();
+  for (const m of meshes) if (m.userData.category === 'slab' || m.userData.category === 'ceiling') box.expandByObject(m);
+  const x0 = box.min.x - 0.2, z0 = box.min.z - 0.2, W = box.max.x - box.min.x + 0.4, D = box.max.z - box.min.z + 0.4;
+  const w = Math.min(2048, Math.ceil(W / texel)), h = Math.min(2048, Math.ceil(D / texel));
+  const planMap = (y, ny, scale) => {
+    const t = floatTexture(w, h, (i, j) => irradianceAt(x0 + (i + 0.5) * W / w, y, z0 + (j + 0.5) * D / h, 0, ny, 0, leds, power, halo, scale));
+    t.repeat.set(1 / W, 1 / D); t.offset.set(-x0 / W, -z0 / D);
+    return t;
+  };
+  const maps = new Map();   // mesh -> texture
+  const swapped = [];
+  for (const m of meshes) {
+    const cat = m.userData.category;
+    let tex = null;
+    if (cat === 'slab') { m.geometry.computeBoundingBox(); tex = planMap(m.geometry.boundingBox.max.y, 1, floorScale); }
+    else if (cat === 'ceiling') { m.geometry.computeBoundingBox(); tex = planMap(m.geometry.boundingBox.min.y, -1, wallScale); }
+    else if (cat === 'wall') {
+      // One map along the wall by height, on the big faces' (along, y) UVs; the wall's own texels see its two sides.
+      m.geometry.computeBoundingBox();
+      const b = m.geometry.boundingBox, alongX = (b.max.x - b.min.x) >= (b.max.z - b.min.z);
+      const a0 = alongX ? b.min.x : b.min.z, len = alongX ? b.max.x - b.min.x : b.max.z - b.min.z, y0 = b.min.y, hgt = b.max.y - b.min.y;
+      if (len < 0.05 || hgt < 0.05) continue;
+      const tw = Math.max(2, Math.ceil(len / wallTexel)), th = Math.max(2, Math.ceil(hgt / wallTexel));
+      const across = alongX ? (b.min.z + b.max.z) / 2 : (b.min.x + b.max.x) / 2, half = (alongX ? b.max.z - b.min.z : b.max.x - b.min.x) / 2 + 0.01;
+      tex = floatTexture(tw, th, (i, j) => {
+        const a = a0 + (i + 0.5) * len / tw, y = y0 + (j + 0.5) * hgt / th;
+        // Both faces of the wall, the brighter side wins (a face map cannot tell the sides apart).
+        let best = 0;
+        for (const s of [-1, 1]) {
+          const px = alongX ? a : across + s * half, pz = alongX ? across + s * half : a;
+          const nx = alongX ? 0 : s, nz = alongX ? s : 0;
+          best = Math.max(best, irradianceAt(px, y, pz, nx, 0, nz, leds, power, halo, wallScale));
+        }
+        return best;
+      });
+      tex.repeat.set(1 / len, 1 / hgt); tex.offset.set(-a0 / len, -y0 / hgt);
+    }
+    if (tex) maps.set(m, tex);
+  }
+  // Fixtures (doors, windows, sliders) and other small parts: one texel each, the mean irradiance at the part's
+  // centre over the four wall directions, so they read as lit as the wall they sit in.
+  const centre = new THREE.Vector3(), bb = new THREE.Box3();
+  for (const m of extraMeshes) {
+    if (maps.has(m)) continue;
+    bb.setFromObject(m); if (bb.isEmpty()) continue;
+    bb.getCenter(centre);
+    let e = 0;
+    for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) e += irradianceAt(centre.x, centre.y, centre.z, nx, 0, nz, leds, power, halo, wallScale);
+    maps.set(m, floatTexture(1, 1, () => e / 4));
+  }
+  const apply = on => {
+    if (on) {
+      for (const [m, tex] of maps) {
+        if (!m.userData.liveMaterial) m.userData.liveMaterial = m.material;
+        if (!m.userData.mappedMaterial) { const c = m.userData.liveMaterial.clone(); c.lightMap = tex; c.lightMapIntensity = 1; c.customProgramCacheKey = m.userData.liveMaterial.customProgramCacheKey; c.onBeforeCompile = m.userData.liveMaterial.onBeforeCompile; m.userData.mappedMaterial = c; }
+        m.material = m.userData.mappedMaterial;
+        swapped.push(m);
+      }
+    } else {
+      for (const m of swapped) if (m.userData.liveMaterial) m.material = m.userData.liveMaterial;
+      swapped.length = 0;
+    }
+  };
+  const setIntensity = k => { for (const m of maps.keys()) if (m.userData.mappedMaterial) m.userData.mappedMaterial.lightMapIntensity = k; };
+  return { maps, apply, setIntensity, bakedPower: power, size: [w, h] };
+}

@@ -36442,6 +36442,134 @@ float roomMask(int i, vec3 vRoomPos) {
     };
     return { bezel, lens, trim };
   }
+  var SPOT = { angle: MathUtils.degToRad(55), penumbra: 0.36, range: 6.5, haloRange: 5, haloDrop: 0.06 };
+  function attenuation(d, range) {
+    const d2 = Math.max(d * d, 1e-4);
+    const f = Math.max(0, 1 - Math.pow(d / range, 4));
+    return f * f / d2;
+  }
+  function smoothstep2(a, b, x) {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  }
+  function irradianceAt(px2, py2, pz2, nx, ny, nz, leds, power, halo, scale) {
+    let e = 0;
+    const coneCos = Math.cos(SPOT.angle), penumbraCos = Math.cos(SPOT.angle * (1 - SPOT.penumbra));
+    for (const l of leds) {
+      if (py2 < l.yLo || py2 > l.yHi || !l.boxes.some((b) => px2 >= b[0] && px2 <= b[2] && pz2 >= b[1] && pz2 <= b[3])) continue;
+      const [lx, ly, lz] = l.world;
+      let dx = px2 - lx, dy = py2 - ly, dz = pz2 - lz, d = Math.hypot(dx, dy, dz);
+      if (d > 1e-3 && d < SPOT.range) {
+        const cosA = -dy / d;
+        const dotNL = -(dx * nx + dy * ny + dz * nz) / d;
+        if (dotNL > 0 && cosA > coneCos) e += power * scale * attenuation(d, SPOT.range) * smoothstep2(coneCos, penumbraCos, cosA) * dotNL;
+      }
+      dy = py2 - (ly - SPOT.haloDrop);
+      d = Math.hypot(dx, dy, dz);
+      if (d > 1e-3 && d < SPOT.haloRange) {
+        const dotNL = -(dx * nx + dy * ny + dz * nz) / d;
+        if (dotNL > 0) e += power * halo * attenuation(d, SPOT.haloRange) * dotNL;
+      }
+    }
+    return e;
+  }
+  function floatTexture(w, h, fill2) {
+    const data = new Float32Array(w * h * 4);
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const e = fill2(i, j), k = (j * w + i) * 4;
+      data[k] = e;
+      data[k + 1] = e * 0.9;
+      data[k + 2] = e * 0.76;
+      data[k + 3] = 1;
+    }
+    const t = new DataTexture(data, w, h, RGBAFormat, FloatType);
+    t.colorSpace = NoColorSpace;
+    t.minFilter = LinearFilter;
+    t.magFilter = LinearFilter;
+    t.wrapS = t.wrapT = ClampToEdgeWrapping;
+    t.channel = 0;
+    t.needsUpdate = true;
+    return t;
+  }
+  function bakeLightMaps(meshes, leds, { power = 9, halo = 0.15, floorScale = 0.6, wallScale = 1, texel = 0.04, wallTexel = 0.06, extraMeshes = [] } = {}) {
+    const box2 = new Box3();
+    for (const m of meshes) if (m.userData.category === "slab" || m.userData.category === "ceiling") box2.expandByObject(m);
+    const x0 = box2.min.x - 0.2, z0 = box2.min.z - 0.2, W = box2.max.x - box2.min.x + 0.4, D = box2.max.z - box2.min.z + 0.4;
+    const w = Math.min(2048, Math.ceil(W / texel)), h = Math.min(2048, Math.ceil(D / texel));
+    const planMap = (y, ny, scale) => {
+      const t = floatTexture(w, h, (i, j) => irradianceAt(x0 + (i + 0.5) * W / w, y, z0 + (j + 0.5) * D / h, 0, ny, 0, leds, power, halo, scale));
+      t.repeat.set(1 / W, 1 / D);
+      t.offset.set(-x0 / W, -z0 / D);
+      return t;
+    };
+    const maps = /* @__PURE__ */ new Map();
+    const swapped = [];
+    for (const m of meshes) {
+      const cat = m.userData.category;
+      let tex = null;
+      if (cat === "slab") {
+        m.geometry.computeBoundingBox();
+        tex = planMap(m.geometry.boundingBox.max.y, 1, floorScale);
+      } else if (cat === "ceiling") {
+        m.geometry.computeBoundingBox();
+        tex = planMap(m.geometry.boundingBox.min.y, -1, wallScale);
+      } else if (cat === "wall") {
+        m.geometry.computeBoundingBox();
+        const b = m.geometry.boundingBox, alongX = b.max.x - b.min.x >= b.max.z - b.min.z;
+        const a0 = alongX ? b.min.x : b.min.z, len = alongX ? b.max.x - b.min.x : b.max.z - b.min.z, y0 = b.min.y, hgt = b.max.y - b.min.y;
+        if (len < 0.05 || hgt < 0.05) continue;
+        const tw = Math.max(2, Math.ceil(len / wallTexel)), th = Math.max(2, Math.ceil(hgt / wallTexel));
+        const across = alongX ? (b.min.z + b.max.z) / 2 : (b.min.x + b.max.x) / 2, half = (alongX ? b.max.z - b.min.z : b.max.x - b.min.x) / 2 + 0.01;
+        tex = floatTexture(tw, th, (i, j) => {
+          const a = a0 + (i + 0.5) * len / tw, y = y0 + (j + 0.5) * hgt / th;
+          let best = 0;
+          for (const s of [-1, 1]) {
+            const px2 = alongX ? a : across + s * half, pz2 = alongX ? across + s * half : a;
+            const nx = alongX ? 0 : s, nz = alongX ? s : 0;
+            best = Math.max(best, irradianceAt(px2, y, pz2, nx, 0, nz, leds, power, halo, wallScale));
+          }
+          return best;
+        });
+        tex.repeat.set(1 / len, 1 / hgt);
+        tex.offset.set(-a0 / len, -y0 / hgt);
+      }
+      if (tex) maps.set(m, tex);
+    }
+    const centre = new Vector3(), bb = new Box3();
+    for (const m of extraMeshes) {
+      if (maps.has(m)) continue;
+      bb.setFromObject(m);
+      if (bb.isEmpty()) continue;
+      bb.getCenter(centre);
+      let e = 0;
+      for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) e += irradianceAt(centre.x, centre.y, centre.z, nx, 0, nz, leds, power, halo, wallScale);
+      maps.set(m, floatTexture(1, 1, () => e / 4));
+    }
+    const apply = (on) => {
+      if (on) {
+        for (const [m, tex] of maps) {
+          if (!m.userData.liveMaterial) m.userData.liveMaterial = m.material;
+          if (!m.userData.mappedMaterial) {
+            const c = m.userData.liveMaterial.clone();
+            c.lightMap = tex;
+            c.lightMapIntensity = 1;
+            c.customProgramCacheKey = m.userData.liveMaterial.customProgramCacheKey;
+            c.onBeforeCompile = m.userData.liveMaterial.onBeforeCompile;
+            m.userData.mappedMaterial = c;
+          }
+          m.material = m.userData.mappedMaterial;
+          swapped.push(m);
+        }
+      } else {
+        for (const m of swapped) if (m.userData.liveMaterial) m.material = m.userData.liveMaterial;
+        swapped.length = 0;
+      }
+    };
+    const setIntensity = (k) => {
+      for (const m of maps.keys()) if (m.userData.mappedMaterial) m.userData.mappedMaterial.lightMapIntensity = k;
+    };
+    return { maps, apply, setIntensity, bakedPower: power, size: [w, h] };
+  }
 
   // ../js/fixtures/common.js
   function placeFixture(group, position = [0, 0, 0], rotationDeg = 0) {
@@ -36718,6 +36846,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const RENDER = { dpr: TOUCH2 ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH2 ? 2 : 3, shadowSize: 512, haloLights: true };
     const SPOT_POOL = RENDER.lights;
     const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1, base: 1, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
+    let mappedLights = false;
     const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
     const TUNE_KEY = "residence.tour.lighting.v1";
     const tune = { ...TUNE_DEFAULTS };
@@ -37102,7 +37231,8 @@ float roomMask(int i, vec3 vRoomPos) {
       scene.add(root);
       root.updateMatrixWorld(true);
       const box2 = new Box3(new Vector3(-hx, z0, -hz), new Vector3(hx, z1, hz));
-      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings };
+      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings, baked: null };
+      if (mappedLights) setMappedLights(true);
       lastSunUpdate = -1;
       applyQuality();
       const doors = fixtures.filter((g) => g.userData.fixture.kind === "hinged door").length;
@@ -37344,8 +37474,36 @@ float roomMask(int i, vec3 vRoomPos) {
     }
     let shadowPickTimer = 0;
     const ledDistance = /* @__PURE__ */ new Map();
+    function setMappedLights(on) {
+      if (!built) {
+        mappedLights = on;
+        return;
+      }
+      if (on && !built.baked) {
+        const t0 = performance.now();
+        built.baked = bakeLightMaps(built.meshes, built.leds, { power: tune.power, halo: tune.halo, floorScale: tune.floor, wallScale: tune.wall, extraMeshes: built.fixtureMeshes });
+        console.info(`[plan] baked light maps in ${Math.round(performance.now() - t0)} ms, plan map ${built.baked.size.join("x")}`);
+      }
+      mappedLights = on;
+      built.baked?.apply(on);
+      if (on) built.baked.setIntensity(tune.power / built.baked.bakedPower);
+      for (const s of built.spots) {
+        s.intensity = 0;
+        s.visible = !on;
+        if (s.userData.halo) {
+          s.userData.halo.intensity = 0;
+          s.userData.halo.visible = !on;
+        }
+      }
+      renderer.shadowMap.needsUpdate = true;
+      sceneDirty = 3;
+    }
     function updateLights(dt) {
       if (!built || !built.spots.length) return;
+      if (mappedLights) {
+        if (built.baked) built.baked.setIntensity(tune.power / built.baked.bakedPower);
+        return;
+      }
       const { spots, leds } = built;
       const eye = camera.position;
       for (const led of leds) ledDistance.set(led, Math.hypot(led.world[0] - eye.x, led.world[1] - eye.y, led.world[2] - eye.z));
@@ -37702,6 +37860,7 @@ float roomMask(int i, vec3 vRoomPos) {
         } else input.nextElementSibling.textContent = Number(tune[input.name]).toFixed(input.step.includes(".") ? 2 : 1);
       }
       tunePanel.querySelector('input[name="clock"]').checked = !!tune.clock;
+      tunePanel.querySelector('input[name="mapped"]').checked = mappedLights;
     }
     function applyTune() {
       mats.setGlass(tune.glass);
@@ -37716,6 +37875,10 @@ float roomMask(int i, vec3 vRoomPos) {
       if (e.target.name === "clock") {
         tune.clock = e.target.checked ? 1 : 0;
         applyTune();
+        return;
+      }
+      if (e.target.name === "mapped") {
+        setMappedLights(e.target.checked);
         return;
       }
       if (e.target.name in tune) {
@@ -37756,6 +37919,12 @@ float roomMask(int i, vec3 vRoomPos) {
       if (e.target === fileInput) return;
       if (e.code === "KeyT") {
         setTuning(!tuningOpen);
+        return;
+      }
+      if (e.code === "KeyL") {
+        setMappedLights(!mappedLights);
+        syncTunePanel();
+        showHint(mappedLights ? "House lights: baked light maps" : "House lights: real time");
         return;
       }
       if (mode !== "walk") return;
@@ -37978,7 +38147,11 @@ float roomMask(int i, vec3 vRoomPos) {
     const src = new URLSearchParams(location.search).get("src");
     if (src) loadUrl(src);
     else setStatus("");
-    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
+    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, get mappedLights() {
+      return mappedLights;
+    }, get renderer() {
+      return renderer;
+    }, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
       return mode;
     }, get player() {
       return player;

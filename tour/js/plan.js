@@ -16,7 +16,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { createMaterials } from './model/materials.js';
 import { buildSlab, buildFooting, buildWall, buildRoof, buildFascia, buildGlazing, buildCeiling, openingBoxes, floorTriangles } from './model/surfaces.js';
-import { planDownlights, createRoomMask, buildDownlightFixtures } from './model/lighting.js';
+import { planDownlights, createRoomMask, buildDownlightFixtures, bakeLightMaps } from './model/lighting.js';
 import { extractStandardDoor, createHingedDoor, openingFor as doorOpeningFor } from './fixtures/hinged-door.js';
 import { createWindow } from './fixtures/window.js';
 import { createSlidingDoor } from './fixtures/sliding-door.js';
@@ -38,6 +38,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const RENDER = { dpr: TOUCH ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, haloLights: true };
   const SPOT_POOL = RENDER.lights;   // pooled downlights; the nearest fixtures take a slot, the rest wait
   const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1.0, base: 1.0, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
+  let mappedLights = false;   // L: house lights from baked light maps instead of the run-time spot pool
   const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
   const TUNE_KEY = 'residence.tour.lighting.v1';   // shared with tour.html, so both pages show the same light
   const tune = { ...TUNE_DEFAULTS };
@@ -358,7 +359,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(root);
     root.updateMatrixWorld(true);
     const box = new THREE.Box3(new THREE.Vector3(-hx, z0, -hz), new THREE.Vector3(hx, z1, hz));
-    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings };
+    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings, baked: null };
+    if (mappedLights) setMappedLights(true);
     lastSunUpdate = -1;
     applyQuality();
     const doors = fixtures.filter(g => g.userData.fixture.kind === 'hinged door').length;
@@ -548,8 +550,23 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // those cast real shadow maps, the rest are confined by their room boxes.
   let shadowPickTimer = 0;
   const ledDistance = new Map();
+  function setMappedLights(on) {
+    if (!built) { mappedLights = on; return; }
+    if (on && !built.baked) {
+      const t0 = performance.now();
+      built.baked = bakeLightMaps(built.meshes, built.leds, { power: tune.power, halo: tune.halo, floorScale: tune.floor, wallScale: tune.wall, extraMeshes: built.fixtureMeshes });
+      console.info(`[plan] baked light maps in ${Math.round(performance.now() - t0)} ms, plan map ${built.baked.size.join('x')}`);
+    }
+    mappedLights = on;
+    built.baked?.apply(on);
+    if (on) built.baked.setIntensity(tune.power / built.baked.bakedPower);
+    // Baked: the run-time lights leave the scene, so every shader drops its spot and point light loops.
+    for (const s of built.spots) { s.intensity = 0; s.visible = !on; if (s.userData.halo) { s.userData.halo.intensity = 0; s.userData.halo.visible = !on; } }
+    renderer.shadowMap.needsUpdate = true; sceneDirty = 3;
+  }
   function updateLights(dt) {
     if (!built || !built.spots.length) return;
+    if (mappedLights) { if (built.baked) built.baked.setIntensity(tune.power / built.baked.bakedPower); return; }
     const { spots, leds } = built;
     const eye = camera.position;
     for (const led of leds) ledDistance.set(led, Math.hypot(led.world[0] - eye.x, led.world[1] - eye.y, led.world[2] - eye.z));
@@ -834,6 +851,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       else input.nextElementSibling.textContent = Number(tune[input.name]).toFixed(input.step.includes('.') ? 2 : 1);
     }
     tunePanel.querySelector('input[name="clock"]').checked = !!tune.clock;
+    tunePanel.querySelector('input[name="mapped"]').checked = mappedLights;
   }
   function applyTune() {
     mats.setGlass(tune.glass);
@@ -842,6 +860,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   tunePanel.addEventListener('input', e => {
     if (e.target.name === 'clock') { tune.clock = e.target.checked ? 1 : 0; applyTune(); return; }
+    if (e.target.name === 'mapped') { setMappedLights(e.target.checked); return; }
     if (e.target.name in tune) { tune[e.target.name] = Number(e.target.value); if (e.target.name === 'hour') tune.clock = 0; applyTune(); syncTunePanel(); }
   });
   tunePanel.querySelector('[data-reset]').addEventListener('click', () => { Object.assign(tune, TUNE_DEFAULTS); applyTune(); syncTunePanel(); });
@@ -864,6 +883,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   window.addEventListener('keydown', e => {
     if (e.target === fileInput) return;
     if (e.code === 'KeyT') { setTuning(!tuningOpen); return; }
+    if (e.code === 'KeyL') { setMappedLights(!mappedLights); syncTunePanel(); showHint(mappedLights ? 'House lights: baked light maps' : 'House lights: real time'); return; }
     if (mode !== 'walk') return;
     if (e.code === 'Escape') { if (tuningOpen) { setTuning(false); return; } exitWalk(); return; }
     if (e.code === 'KeyE' || e.code === 'Space') { activateFixture(focusFixture); e.preventDefault(); return; }
@@ -1007,5 +1027,5 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const src = new URLSearchParams(location.search).get('src');
   if (src) loadUrl(src); else setStatus('');
 
-  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
+  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, get mappedLights() { return mappedLights; }, get renderer() { return renderer; }, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
 })();
