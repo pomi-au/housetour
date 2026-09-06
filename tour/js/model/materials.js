@@ -158,6 +158,35 @@ export function createMaterials({ renderer, physical = false, glassStrength = 2.
     t.repeat.set(320 / 6, 1); t.anisotropy = maxAniso;
     surfaceTextures.street = t; return t;
   }
+  // Pre-rendered street lamp light: one map over the whole streetscape, every lamp head (height h, warm) added
+  // with an inverse-square falloff and the cosine of incidence on the ground, so pools overlap and sum as real
+  // light would. Rendered once at build time into a canvas; no lights at run time.
+  function lampLightMap(lamps, { size = 2048, extent = 320, height = 4.9, power = 55, reach = 16 } = {}) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = size;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(size, size), d = img.data;
+    const mpp = extent / size, r = Math.ceil(reach / mpp);
+    const acc = new Float32Array(size * size);
+    for (const l of lamps) {
+      const cx = (l.x + extent / 2) / mpp, cy = (l.z + extent / 2) / mpp;
+      const i0 = Math.max(0, Math.floor(cx - r)), i1 = Math.min(size - 1, Math.ceil(cx + r)), j0 = Math.max(0, Math.floor(cy - r)), j1 = Math.min(size - 1, Math.ceil(cy + r));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const dx = (i - cx) * mpp, dz = (j - cy) * mpp, d2 = dx * dx + dz * dz;
+        if (d2 > reach * reach) continue;
+        const dist2 = d2 + height * height;
+        acc[j * size + i] += power * height / (dist2 * Math.sqrt(dist2));   // E = P cos(theta) / r^2
+      }
+    }
+    for (let k = 0; k < size * size; k++) {
+      const v = 1 - Math.exp(-acc[k]);                                       // soft roll-off into white
+      d[k * 4] = Math.round(255 * v); d[k * 4 + 1] = Math.round(210 * v); d[k * 4 + 2] = Math.round(138 * v); d[k * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = maxAniso;
+    t.userData.extent = extent;
+    return t;
+  }
   function lightPoolTexture() {
     if (surfaceTextures.pool) return surfaceTextures.pool;
     const size = 128, cv = document.createElement('canvas'); cv.width = cv.height = size;
@@ -168,5 +197,5 @@ export function createMaterials({ renderer, physical = false, glassStrength = 2.
     const t = new THREE.CanvasTexture(cv); surfaceTextures.pool = t; return t;
   }
 
-  return { surfaceMaterial, reliefTexture, albedoFromRelief, finishes, finishFor, materialFor, setGlass, glassMaterials, fixtures, grassTexture, streetTexture, lightPoolTexture };
+  return { surfaceMaterial, reliefTexture, albedoFromRelief, finishes, finishFor, materialFor, setGlass, glassMaterials, fixtures, grassTexture, streetTexture, lightPoolTexture, lampLightMap };
 }

@@ -177,16 +177,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshLambertMaterial({ color: 0x3a3d40 }), lampPos.length);
     const headGeo = new THREE.BoxGeometry(0.55, 0.16, 0.32); headGeo.translate(0, 4.9, -1.35);
     const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshBasicMaterial({ color: 0x555555, toneMapped: false }), lampPos.length);
-    const poolGeo = new THREE.PlaneGeometry(11, 11); poolGeo.rotateX(-Math.PI / 2); poolGeo.translate(0, 0.04, -2.0);
-    const pools = new THREE.InstancedMesh(poolGeo, new THREE.MeshBasicMaterial({ map: mats.lightPoolTexture(), color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }), lampPos.length);
-    lampPos.forEach((p, k) => { m.identity(); m.setPosition(p.x, groundY, p.z); lamps.setMatrixAt(k, m); heads.setMatrixAt(k, m); pools.setMatrixAt(k, m); });
+    lampPos.forEach((p, k) => { m.identity(); m.setPosition(p.x, groundY, p.z); lamps.setMatrixAt(k, m); heads.setMatrixAt(k, m); });
+    // Lamp light on the ground: one pre-rendered map (materials.lampLightMap) on a plane just above the roads, added
+    // over the surfaces and faded in at dusk. No run-time lights: the map is rendered once here.
+    const lightMap = mats.lampLightMap(lampPos.map(p => ({ x: p.x, z: p.z - 1.35 })), { extent: streetLen, height: 4.9 });
+    const poolGeo = new THREE.PlaneGeometry(streetLen, streetLen); poolGeo.rotateX(-Math.PI / 2);
+    const pools = new THREE.Mesh(poolGeo, new THREE.MeshBasicMaterial({ map: lightMap, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    pools.position.y = groundY + 0.045;
     for (const o of [lamps, heads, pools]) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; o.raycast = () => {}; root.add(o); }
     const lampLights = [];
-    for (const p of lampPos.filter(p => p.x === 0 && Math.abs(p.z) < pitch)) {
-      const light = new THREE.PointLight(0xffd28a, 0, 26, 1.6);
-      light.position.set(p.x, groundY + 4.9, p.z - 1.35);
-      light.castShadow = false; root.add(light); lampLights.push(light);
-    }
 
     const hedgeGeo = new THREE.BoxGeometry(1.0, 1.1, 0.7); hedgeGeo.translate(0, 0.55, 0);
     const hedgeSpots = [];

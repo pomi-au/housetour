@@ -35863,6 +35863,38 @@ void main() {
       surfaceTextures.street = t;
       return t;
     }
+    function lampLightMap(lamps, { size = 2048, extent = 320, height = 4.9, power = 55, reach = 16 } = {}) {
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = size;
+      const ctx = cv.getContext("2d");
+      const img = ctx.createImageData(size, size), d = img.data;
+      const mpp = extent / size, r = Math.ceil(reach / mpp);
+      const acc = new Float32Array(size * size);
+      for (const l of lamps) {
+        const cx = (l.x + extent / 2) / mpp, cy = (l.z + extent / 2) / mpp;
+        const i0 = Math.max(0, Math.floor(cx - r)), i1 = Math.min(size - 1, Math.ceil(cx + r)), j0 = Math.max(0, Math.floor(cy - r)), j1 = Math.min(size - 1, Math.ceil(cy + r));
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+          const dx = (i - cx) * mpp, dz = (j - cy) * mpp, d2 = dx * dx + dz * dz;
+          if (d2 > reach * reach) continue;
+          const dist2 = d2 + height * height;
+          acc[j * size + i] += power * height / (dist2 * Math.sqrt(dist2));
+        }
+      }
+      for (let k = 0; k < size * size; k++) {
+        const v = 1 - Math.exp(-acc[k]);
+        d[k * 4] = Math.round(255 * v);
+        d[k * 4 + 1] = Math.round(210 * v);
+        d[k * 4 + 2] = Math.round(138 * v);
+        d[k * 4 + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      const t = new CanvasTexture(cv);
+      t.colorSpace = SRGBColorSpace;
+      t.wrapS = t.wrapT = ClampToEdgeWrapping;
+      t.anisotropy = maxAniso;
+      t.userData.extent = extent;
+      return t;
+    }
     function lightPoolTexture() {
       if (surfaceTextures.pool) return surfaceTextures.pool;
       const size = 128, cv = document.createElement("canvas");
@@ -35878,7 +35910,7 @@ void main() {
       surfaceTextures.pool = t;
       return t;
     }
-    return { surfaceMaterial, reliefTexture, albedoFromRelief, finishes, finishFor, materialFor, setGlass, glassMaterials, fixtures, grassTexture, streetTexture, lightPoolTexture };
+    return { surfaceMaterial, reliefTexture, albedoFromRelief, finishes, finishFor, materialFor, setGlass, glassMaterials, fixtures, grassTexture, streetTexture, lightPoolTexture, lampLightMap };
   }
 
   // ../js/model/surfaces.js
@@ -36837,17 +36869,17 @@ float roomMask(int i, vec3 vRoomPos) {
       const headGeo = new BoxGeometry(0.55, 0.16, 0.32);
       headGeo.translate(0, 4.9, -1.35);
       const heads = new InstancedMesh(headGeo, new MeshBasicMaterial({ color: 5592405, toneMapped: false }), lampPos.length);
-      const poolGeo = new PlaneGeometry(11, 11);
-      poolGeo.rotateX(-Math.PI / 2);
-      poolGeo.translate(0, 0.04, -2);
-      const pools = new InstancedMesh(poolGeo, new MeshBasicMaterial({ map: mats.lightPoolTexture(), color: 16765578, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }), lampPos.length);
       lampPos.forEach((p, k) => {
         m.identity();
         m.setPosition(p.x, groundY, p.z);
         lamps.setMatrixAt(k, m);
         heads.setMatrixAt(k, m);
-        pools.setMatrixAt(k, m);
       });
+      const lightMap = mats.lampLightMap(lampPos.map((p) => ({ x: p.x, z: p.z - 1.35 })), { extent: streetLen, height: 4.9 });
+      const poolGeo = new PlaneGeometry(streetLen, streetLen);
+      poolGeo.rotateX(-Math.PI / 2);
+      const pools = new Mesh(poolGeo, new MeshBasicMaterial({ map: lightMap, transparent: true, opacity: 0, depthWrite: false, blending: AdditiveBlending, toneMapped: false }));
+      pools.position.y = groundY + 0.045;
       for (const o of [lamps, heads, pools]) {
         o.castShadow = false;
         o.receiveShadow = false;
@@ -36857,13 +36889,6 @@ float roomMask(int i, vec3 vRoomPos) {
         root.add(o);
       }
       const lampLights = [];
-      for (const p of lampPos.filter((p2) => p2.x === 0 && Math.abs(p2.z) < pitch)) {
-        const light = new PointLight(16765578, 0, 26, 1.6);
-        light.position.set(p.x, groundY + 4.9, p.z - 1.35);
-        light.castShadow = false;
-        root.add(light);
-        lampLights.push(light);
-      }
       const hedgeGeo = new BoxGeometry(1, 1.1, 0.7);
       hedgeGeo.translate(0, 0.55, 0);
       const hedgeSpots = [];
