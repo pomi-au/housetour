@@ -38587,7 +38587,7 @@ float roomMask(int i, vec3 vRoomPos) {
           tubSkeleton.scale.setScalar(k);
           tubSkeleton.position.set((lo[0] + hi[0]) / 2, itemY(shell, lo[1]) + 0.03, lo[2] + 0.4 * k);
           tubSkeleton.userData.door = door;
-          tubSkeleton.visible = door.progress > 0.02;
+          tubSkeleton.visible = false;
           root.add(tubSkeleton);
         }
       }
@@ -38945,8 +38945,14 @@ float roomMask(int i, vec3 vRoomPos) {
         const s = action.state;
         const opening = s.target < 0.5;
         R.commandOpening(s, opening, { announce: false });
+        if (opening && built?.tubSkeleton && s === built.tubSkeleton.userData.door) {
+          built.tubSkeleton.visible = true;
+          built.skeleton.visible = false;
+          pendingCloset = null;
+        }
         const spot = opening && built?.closetSpots?.get(s.id);
         if (spot) {
+          if (built.tubSkeleton) built.tubSkeleton.visible = false;
           built.skeleton.rotation.y = spot.yaw;
           built.skeleton.visible = true;
           if (spot.leaves.length === 1) {
@@ -39085,7 +39091,6 @@ float roomMask(int i, vec3 vRoomPos) {
         sceneDirty = 3;
       }
       placeSkeletonBehindMovingLeaf();
-      if (built.tubSkeleton) built.tubSkeleton.visible = built.tubSkeleton.userData.door.progress > 0.02;
       cullOtherLevel();
       updateLights(dt);
       const poseKey = `${player.x.toFixed(3)}|${player.footY.toFixed(3)}|${player.z.toFixed(3)}|${player.yaw.toFixed(4)}|${player.pitch.toFixed(4)}|${zoomLevel.toFixed(3)}`;

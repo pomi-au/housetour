@@ -1184,7 +1184,7 @@ float roomMask(int i, vec3 vRoomPos) {
         // Head end at the north (-z) end of the shell, feet toward the taps at the south end.
         tubSkeleton.position.set((lo[0] + hi[0]) / 2, itemY(shell, lo[1]) + 0.03, lo[2] + 0.40 * k);
         tubSkeleton.userData.door = door;
-        tubSkeleton.visible = door.progress > 0.02;
+        tubSkeleton.visible = false;   // the one skeleton starts in a closet; it moves here when the bathroom door is opened
         root.add(tubSkeleton);
       }
     }
@@ -1505,8 +1505,14 @@ float roomMask(int i, vec3 vRoomPos) {
       R.commandOpening(s, opening, { announce: false });
       // The skeleton is moved behind this door while the leaf is still shut. A single leaf is known now; for a
       // slider the leaf that moves is found on its first frame of motion (see placeSkeletonBehindMovingLeaf).
+      // One skeleton in the house: opening the bathroom door puts it in the tub (bathing pose) and empties the
+      // closets; opening a closet stands it behind that door and empties the tub.
+      if (opening && built?.tubSkeleton && s === built.tubSkeleton.userData.door) {
+        built.tubSkeleton.visible = true; built.skeleton.visible = false; pendingCloset = null;
+      }
       const spot = opening && built?.closetSpots?.get(s.id);
       if (spot) {
+        if (built.tubSkeleton) built.tubSkeleton.visible = false;
         built.skeleton.rotation.y = spot.yaw; built.skeleton.visible = true;
         if (spot.leaves.length === 1) { built.skeleton.position.copy(spot.leaves[0].pos); pendingCloset = null; }
         else pendingCloset = { state: s, spot, deadline: performance.now() + 4000 };
@@ -1634,7 +1640,6 @@ float roomMask(int i, vec3 vRoomPos) {
     }
     if (moving) { renderer.shadowMap.needsUpdate = true; for (const s of built.spots) if (s.castShadow) s.shadow.needsUpdate = true; built.sun.shadow.needsUpdate = true; sceneDirty = 3; }
     placeSkeletonBehindMovingLeaf();
-    if (built.tubSkeleton) built.tubSkeleton.visible = built.tubSkeleton.userData.door.progress > 0.02;
     cullOtherLevel();
     updateLights(dt);
     // Does anything on screen change this frame? A still walker, closed doors, stopped clock and unchanged lights
