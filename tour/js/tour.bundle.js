@@ -38143,7 +38143,7 @@ float roomMask(int i, vec3 vRoomPos) {
       const parapet = new BoxGeometry(W + 0.3, 0.25, D + 0.3);
       parapet.translate(0, H + 0.12, 0);
       const houseGeo = mergeGeometries([shell, garage, parapet]);
-      const sx = 21, sz = 17;
+      const sx = 24, sz = 24;
       const seedRnd = (i, j) => {
         const v = Math.sin(i * 127.1 + j * 311.7) * 43758.5453;
         return v - Math.floor(v);
@@ -38203,7 +38203,167 @@ float roomMask(int i, vec3 vRoomPos) {
       windows.raycast = () => {
       };
       root.add(windows);
-      return { houses, windows };
+      const asphalt = new MeshLambertMaterial({ map: streetTexture(), color: 16777215 });
+      const streetLen = 320, streetW = 5.5;
+      const streetGeo = new PlaneGeometry(streetLen, streetW);
+      streetGeo.rotateX(-Math.PI / 2);
+      const streets = [];
+      for (let k = -6; k <= 5; k++) streets.push({ x: 0, z: k * sz + sz / 2, along: "x" });
+      for (let k = -6; k <= 5; k++) if (k !== -1) streets.push({ x: k * sx + sx / 2, z: 0, along: "z" });
+      const streetMesh = new InstancedMesh(streetGeo, asphalt, streets.length);
+      streets.forEach((st, k) => {
+        m.makeRotationY(st.along === "x" ? 0 : Math.PI / 2);
+        m.setPosition(st.x, groundY + 0.02, st.z);
+        streetMesh.setMatrixAt(k, m);
+      });
+      streetMesh.receiveShadow = true;
+      streetMesh.frustumCulled = false;
+      streetMesh.raycast = () => {
+      };
+      root.add(streetMesh);
+      const lampPos = [];
+      for (let k = -6; k <= 5; k++) for (let i = -6; i <= 6; i++) lampPos.push({ x: i * sx, z: k * sz + sz / 2 + streetW / 2 + 0.6 });
+      const pole = new CylinderGeometry(0.05, 0.08, 5, 8);
+      pole.translate(0, 2.5, 0);
+      const arm = new BoxGeometry(0.08, 0.08, 1.4);
+      arm.translate(0, 4.95, -0.7);
+      const lampGeo = mergeGeometries([pole, arm]);
+      const lamps = new InstancedMesh(lampGeo, new MeshLambertMaterial({ color: 3816768 }), lampPos.length);
+      const headGeo = new BoxGeometry(0.55, 0.16, 0.32);
+      headGeo.translate(0, 4.9, -1.35);
+      const heads = new InstancedMesh(headGeo, new MeshBasicMaterial({ color: 5592405, toneMapped: false }), lampPos.length);
+      const poolGeo = new PlaneGeometry(11, 11);
+      poolGeo.rotateX(-Math.PI / 2);
+      poolGeo.translate(0, 0.04, -2);
+      const pools = new InstancedMesh(poolGeo, new MeshBasicMaterial({ map: lightPoolTexture(), color: 16765578, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }), lampPos.length);
+      lampPos.forEach((p, k) => {
+        m.identity();
+        m.setPosition(p.x, groundY, p.z);
+        lamps.setMatrixAt(k, m);
+        heads.setMatrixAt(k, m);
+        pools.setMatrixAt(k, m);
+      });
+      for (const o of [lamps, heads, pools]) {
+        o.castShadow = false;
+        o.receiveShadow = false;
+        o.frustumCulled = false;
+        o.raycast = () => {
+        };
+        root.add(o);
+      }
+      const lampLights = [];
+      for (const p of lampPos.filter((p2) => p2.x === 0 && Math.abs(p2.z) < sz)) {
+        const light = new PointLight(16765578, 0, 26, 1.6);
+        light.position.set(p.x, groundY + 4.9, p.z - 1.35);
+        light.castShadow = false;
+        root.add(light);
+        lampLights.push(light);
+      }
+      const lot = LOT;
+      const hedgeGeo = new BoxGeometry(1, 1.1, 0.7);
+      hedgeGeo.translate(0, 0.55, 0);
+      const hedgeSpots = [];
+      const run = (x0, z0, x1, z1) => {
+        const n = Math.max(1, Math.round(Math.hypot(x1 - x0, z1 - z0)));
+        for (let i = 0; i <= n; i++) hedgeSpots.push({ x: x0 + (x1 - x0) * i / n, z: z0 + (z1 - z0) * i / n, yaw: Math.atan2(x1 - x0, z1 - z0) + Math.PI / 2 });
+      };
+      run(lot.x0, lot.z1, lot.x1, lot.z1);
+      run(lot.x1, lot.z1, lot.x1, lot.z0);
+      run(lot.x0, lot.z1, lot.x0, lot.z0);
+      run(lot.x0, lot.z0, lot.driveX0, lot.z0);
+      run(lot.driveX1, lot.z0, lot.x1, lot.z0);
+      const hedge = new InstancedMesh(hedgeGeo, new MeshLambertMaterial({ color: 4155950 }), hedgeSpots.length);
+      hedgeSpots.forEach((h, k) => {
+        m.makeRotationY(h.yaw);
+        m.setPosition(h.x, groundY, h.z);
+        hedge.setColorAt(k, c.setRGB(0.85 + seedRnd(k, 1) * 0.3, 0.9 + seedRnd(k, 2) * 0.2, 0.8));
+        hedge.setMatrixAt(k, m);
+      });
+      hedge.castShadow = false;
+      hedge.receiveShadow = true;
+      hedge.frustumCulled = false;
+      hedge.raycast = () => {
+      };
+      root.add(hedge);
+      return { houses, windows, heads, pools, lampLights };
+    }
+    const LOT = { x0: -16, x1: 8, z0: -11.5, z1: 6, driveX0: -14.5, driveX1: -7.5 };
+    const surfaceTextures = {};
+    function grassTexture() {
+      if (surfaceTextures.grass) return surfaceTextures.grass;
+      const size = 512, cv = document.createElement("canvas");
+      cv.width = cv.height = size;
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = "#4f6a2f";
+      ctx.fillRect(0, 0, size, size);
+      let seed = 4242;
+      const rnd = () => {
+        seed = seed * 1664525 + 1013904223 >>> 0;
+        return seed / 4294967296;
+      };
+      for (let i = 0; i < 26e3; i++) {
+        const g = 90 + Math.floor(rnd() * 70), r = 55 + Math.floor(rnd() * 40), b = 25 + Math.floor(rnd() * 30);
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.85)`;
+        ctx.lineWidth = 1 + rnd() * 1.5;
+        const x = rnd() * size, y = rnd() * size, h = 4 + rnd() * 9, dx = (rnd() - 0.5) * 4;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + dx, y - h);
+        ctx.stroke();
+      }
+      const t = new CanvasTexture(cv);
+      t.wrapS = t.wrapT = RepeatWrapping;
+      t.colorSpace = SRGBColorSpace;
+      t.repeat.set(200, 200);
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      surfaceTextures.grass = t;
+      return t;
+    }
+    function streetTexture() {
+      if (surfaceTextures.street) return surfaceTextures.street;
+      const w = 256, h = 256, cv = document.createElement("canvas");
+      cv.width = w;
+      cv.height = h;
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = "#3b3b3d";
+      ctx.fillRect(0, 0, w, h);
+      let seed = 99;
+      const rnd = () => {
+        seed = seed * 1664525 + 1013904223 >>> 0;
+        return seed / 4294967296;
+      };
+      for (let i = 0; i < 9e3; i++) {
+        const v = 45 + Math.floor(rnd() * 40);
+        ctx.fillStyle = `rgba(${v},${v},${v + 3},0.6)`;
+        ctx.fillRect(rnd() * w, rnd() * h, 2, 2);
+      }
+      ctx.fillStyle = "#d9d2b0";
+      ctx.fillRect(w * 0.1, h / 2 - 3, w * 0.5, 6);
+      ctx.fillStyle = "#cfcfcf";
+      ctx.fillRect(0, 2, w, 3);
+      ctx.fillRect(0, h - 5, w, 3);
+      const t = new CanvasTexture(cv);
+      t.wrapS = t.wrapT = RepeatWrapping;
+      t.colorSpace = SRGBColorSpace;
+      t.repeat.set(320 / 6, 1);
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      surfaceTextures.street = t;
+      return t;
+    }
+    function lightPoolTexture() {
+      if (surfaceTextures.pool) return surfaceTextures.pool;
+      const size = 128, cv = document.createElement("canvas");
+      cv.width = cv.height = size;
+      const ctx = cv.getContext("2d");
+      const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      g.addColorStop(0, "rgba(255,255,255,1)");
+      g.addColorStop(0.5, "rgba(255,255,255,0.35)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+      const t = new CanvasTexture(cv);
+      surfaceTextures.pool = t;
+      return t;
     }
     function buildWalkScene() {
       for (const led of R.ceilingLEDs) led.walkWorld = [led.world[0], walkY(led.state.level, led.world[1]), led.world[2]];
@@ -38602,7 +38762,8 @@ float roomMask(int i, vec3 vRoomPos) {
       su.mieDirectionalG.value = 0.8;
       su.sunPosition.value.copy(sunDir);
       root.add(sky);
-      const ground = new Mesh(new PlaneGeometry(400, 400), new MeshPhysicalMaterial({ color: 7174741, roughness: 1 }));
+      const grass = grassTexture();
+      const ground = new Mesh(new PlaneGeometry(400, 400), surfaceMaterial({ map: grass, bumpMap: grass, bumpScale: 0.03, roughness: 1, metalness: 0, color: 16777215 }));
       ground.rotation.x = -Math.PI / 2;
       ground.position.y = R.PARAMS.GROUND_FLOOR_DATUM - 0.152;
       ground.receiveShadow = true;
@@ -38918,6 +39079,22 @@ float roomMask(int i, vec3 vRoomPos) {
       const dx = player.vx * dt, dz = player.vz * dt;
       const prevX = player.x, prevZ = player.z;
       if (Math.hypot(dx, dz) > 1e-5) moveHorizontal(dx, dz);
+      if (player.x < LOT.x0 + 0.4) {
+        player.x = LOT.x0 + 0.4;
+        player.vx = 0;
+      }
+      if (player.x > LOT.x1 - 0.4) {
+        player.x = LOT.x1 - 0.4;
+        player.vx = 0;
+      }
+      if (player.z < LOT.z0 + 0.4) {
+        player.z = LOT.z0 + 0.4;
+        player.vz = 0;
+      }
+      if (player.z > LOT.z1 - 0.4) {
+        player.z = LOT.z1 - 0.4;
+        player.vz = 0;
+      }
       player.speed = Math.hypot(player.vx, player.vz);
       let g = groundHeight();
       if (g !== null && g - player.footY > STEP_MAX + 0.05) {
@@ -39254,7 +39431,13 @@ float roomMask(int i, vec3 vRoomPos) {
       built.clock.userData.hourHand.rotation.z = -(h % 12 / 12) * Math.PI * 2;
       built.clock.userData.minuteHand.rotation.z = -(h % 1) * Math.PI * 2;
       built.daylight = daylight;
-      if (built.neighbourhood) built.neighbourhood.windows.material.color.setRGB(0.3 + 0.7 * (1 - daylight), 0.36 + 0.44 * (1 - daylight), 0.46 + 0.1 * (1 - daylight));
+      if (built.neighbourhood) {
+        const nb = built.neighbourhood, night = 1 - daylight;
+        nb.windows.material.color.setRGB(0.3 + 0.7 * night, 0.36 + 0.44 * night, 0.46 + 0.1 * night);
+        nb.heads.material.color.setRGB(0.33 + 0.67 * night, 0.33 + 0.55 * night, 0.33 + 0.25 * night);
+        nb.pools.material.opacity = 0.6 * night;
+        for (const l of nb.lampLights) l.intensity = 40 * night;
+      }
       const { sun, sky, moon, hemi, houseCenter } = built;
       const sunUp = sunElev > -0.02;
       const light = sunUp ? sunDir : moonDir;

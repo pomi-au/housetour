@@ -626,7 +626,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const garage = new THREE.BoxGeometry(6.2, 3.1, 6.6); garage.translate(-W / 2 - 3.0, 1.55, 0.6);
     const parapet = new THREE.BoxGeometry(W + 0.3, 0.25, D + 0.3); parapet.translate(0, H + 0.12, 0);
     const houseGeo = mergeGeometries([shell, garage, parapet]);
-    const sx = 21, sz = 17;
+    const sx = 24, sz = 24;   // one lot pitch; streets run between the rows and columns
     const seedRnd = (i, j) => { const v = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return v - Math.floor(v); };
     const cells = [];
     for (let i = 0; i < NEIGHBOUR_GRID; i++) for (let j = 0; j < NEIGHBOUR_GRID; j++) {
@@ -670,7 +670,99 @@ float roomMask(int i, vec3 vRoomPos) {
     windows.castShadow = false; windows.receiveShadow = false; windows.frustumCulled = false;
     windows.raycast = () => {};
     root.add(windows);
-    return { houses, windows };
+
+    // Streets: asphalt strips between every row (along x) and between the columns (along z), except the column
+    // west of our house where our garage and driveway sit. A tiled texture carries the dashed centre line.
+    const asphalt = new THREE.MeshLambertMaterial({ map: streetTexture(), color: 0xffffff });
+    const streetLen = 320, streetW = 5.5;
+    const streetGeo = new THREE.PlaneGeometry(streetLen, streetW); streetGeo.rotateX(-Math.PI / 2);
+    const streets = [];
+    for (let k = -6; k <= 5; k++) streets.push({ x: 0, z: k * sz + sz / 2, along: 'x' });
+    for (let k = -6; k <= 5; k++) if (k !== -1) streets.push({ x: k * sx + sx / 2, z: 0, along: 'z' });
+    const streetMesh = new THREE.InstancedMesh(streetGeo, asphalt, streets.length);
+    streets.forEach((st, k) => { m.makeRotationY(st.along === 'x' ? 0 : Math.PI / 2); m.setPosition(st.x, groundY + 0.02, st.z); streetMesh.setMatrixAt(k, m); });
+    streetMesh.receiveShadow = true; streetMesh.frustumCulled = false; streetMesh.raycast = () => {};
+    root.add(streetMesh);
+
+    // Street lamps along the row streets, one between every pair of houses: pole and arm in one instanced mesh,
+    // the lamp heads in another (lit at dusk), and a warm pool of light on the road under each.
+    const lampPos = [];
+    for (let k = -6; k <= 5; k++) for (let i = -6; i <= 6; i++) lampPos.push({ x: i * sx, z: k * sz + sz / 2 + streetW / 2 + 0.6 });
+    const pole = new THREE.CylinderGeometry(0.05, 0.08, 5.0, 8); pole.translate(0, 2.5, 0);
+    const arm = new THREE.BoxGeometry(0.08, 0.08, 1.4); arm.translate(0, 4.95, -0.7);
+    const lampGeo = mergeGeometries([pole, arm]);
+    const lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshLambertMaterial({ color: 0x3a3d40 }), lampPos.length);
+    const headGeo = new THREE.BoxGeometry(0.55, 0.16, 0.32); headGeo.translate(0, 4.9, -1.35);
+    const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshBasicMaterial({ color: 0x555555, toneMapped: false }), lampPos.length);
+    const poolGeo = new THREE.PlaneGeometry(11, 11); poolGeo.rotateX(-Math.PI / 2); poolGeo.translate(0, 0.04, -2.0);
+    const pools = new THREE.InstancedMesh(poolGeo, new THREE.MeshBasicMaterial({ map: lightPoolTexture(), color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }), lampPos.length);
+    lampPos.forEach((p, k) => { m.identity(); m.setPosition(p.x, groundY, p.z); lamps.setMatrixAt(k, m); heads.setMatrixAt(k, m); pools.setMatrixAt(k, m); });
+    for (const o of [lamps, heads, pools]) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; o.raycast = () => {}; root.add(o); }
+    // Two real lights at the lamps nearest our frontage, so the house facade picks up the street light at night.
+    const lampLights = [];
+    for (const p of lampPos.filter(p => p.x === 0 && Math.abs(p.z) < sz)) {
+      const light = new THREE.PointLight(0xffd28a, 0, 26, 1.6);
+      light.position.set(p.x, groundY + 4.9, p.z - 1.35);
+      light.castShadow = false; root.add(light); lampLights.push(light);
+    }
+
+    // Hedge around our lot, open at the driveway in front of the garage.
+    const lot = LOT;
+    const hedgeGeo = new THREE.BoxGeometry(1.0, 1.1, 0.7); hedgeGeo.translate(0, 0.55, 0);
+    const hedgeSpots = [];
+    const run = (x0, z0, x1, z1) => { const n = Math.max(1, Math.round(Math.hypot(x1 - x0, z1 - z0))); for (let i = 0; i <= n; i++) hedgeSpots.push({ x: x0 + (x1 - x0) * i / n, z: z0 + (z1 - z0) * i / n, yaw: Math.atan2(x1 - x0, z1 - z0) + Math.PI / 2 }); };
+    run(lot.x0, lot.z1, lot.x1, lot.z1);                 // south
+    run(lot.x1, lot.z1, lot.x1, lot.z0);                 // east
+    run(lot.x0, lot.z1, lot.x0, lot.z0);                 // west
+    run(lot.x0, lot.z0, lot.driveX0, lot.z0);            // north, up to the driveway
+    run(lot.driveX1, lot.z0, lot.x1, lot.z0);            // north, after the driveway
+    const hedge = new THREE.InstancedMesh(hedgeGeo, new THREE.MeshLambertMaterial({ color: 0x3f6a2e }), hedgeSpots.length);
+    hedgeSpots.forEach((h, k) => { m.makeRotationY(h.yaw); m.setPosition(h.x, groundY, h.z); hedge.setColorAt(k, c.setRGB(0.85 + seedRnd(k, 1) * 0.3, 0.9 + seedRnd(k, 2) * 0.2, 0.8)); hedge.setMatrixAt(k, m); });
+    hedge.castShadow = false; hedge.receiveShadow = true; hedge.frustumCulled = false; hedge.raycast = () => {};
+    root.add(hedge);
+    return { houses, windows, heads, pools, lampLights };
+  }
+  // Our lot: the walker cannot leave it (an invisible boundary at the hedge line). Driveway gap on the north side.
+  const LOT = { x0: -16.0, x1: 8.0, z0: -11.5, z1: 6.0, driveX0: -14.5, driveX1: -7.5 };
+  // Procedural surfaces (canvas, generated at run time): grass, asphalt with a dashed centre line, a lamp light pool.
+  const surfaceTextures = {};
+  function grassTexture() {
+    if (surfaceTextures.grass) return surfaceTextures.grass;
+    const size = 512, cv = document.createElement('canvas'); cv.width = cv.height = size;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#4f6a2f'; ctx.fillRect(0, 0, size, size);
+    let seed = 4242; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    for (let i = 0; i < 26000; i++) {
+      const g = 90 + Math.floor(rnd() * 70), r = 55 + Math.floor(rnd() * 40), b = 25 + Math.floor(rnd() * 30);
+      ctx.strokeStyle = `rgba(${r},${g},${b},0.85)`; ctx.lineWidth = 1 + rnd() * 1.5;
+      const x = rnd() * size, y = rnd() * size, h = 4 + rnd() * 9, dx = (rnd() - 0.5) * 4;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dx, y - h); ctx.stroke();
+    }
+    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+    t.repeat.set(200, 200); t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    surfaceTextures.grass = t; return t;
+  }
+  function streetTexture() {
+    if (surfaceTextures.street) return surfaceTextures.street;
+    const w = 256, h = 256, cv = document.createElement('canvas'); cv.width = w; cv.height = h;   // one tile = 6 m x 5.5 m
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#3b3b3d'; ctx.fillRect(0, 0, w, h);
+    let seed = 99; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    for (let i = 0; i < 9000; i++) { const v = 45 + Math.floor(rnd() * 40); ctx.fillStyle = `rgba(${v},${v},${v + 3},0.6)`; ctx.fillRect(rnd() * w, rnd() * h, 2, 2); }
+    ctx.fillStyle = '#d9d2b0'; ctx.fillRect(w * 0.1, h / 2 - 3, w * 0.5, 6);           // dashed centre line, 3 m on / 3 m off
+    ctx.fillStyle = '#cfcfcf'; ctx.fillRect(0, 2, w, 3); ctx.fillRect(0, h - 5, w, 3);   // kerb lines
+    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+    t.repeat.set(320 / 6, 1); t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    surfaceTextures.street = t; return t;
+  }
+  function lightPoolTexture() {
+    if (surfaceTextures.pool) return surfaceTextures.pool;
+    const size = 128, cv = document.createElement('canvas'); cv.width = cv.height = size;
+    const ctx = cv.getContext('2d');
+    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.5, 'rgba(255,255,255,0.35)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
+    const t = new THREE.CanvasTexture(cv); surfaceTextures.pool = t; return t;
   }
 
   function buildWalkScene() {
@@ -1062,7 +1154,8 @@ float roomMask(int i, vec3 vRoomPos) {
     su.turbidity.value = 4; su.rayleigh.value = 1.6; su.mieCoefficient.value = 0.004; su.mieDirectionalG.value = 0.8;
     su.sunPosition.value.copy(sunDir);
     root.add(sky);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshPhysicalMaterial({ color: 0x6d7a55, roughness: 1 }));
+    const grass = grassTexture();
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), surfaceMaterial({ map: grass, bumpMap: grass, bumpScale: 0.03, roughness: 1, metalness: 0, color: 0xffffff }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = R.PARAMS.GROUND_FLOOR_DATUM - 0.152;
     ground.receiveShadow = true;
@@ -1337,6 +1430,11 @@ float roomMask(int i, vec3 vRoomPos) {
     const dx = player.vx * dt, dz = player.vz * dt;
     const prevX = player.x, prevZ = player.z;
     if (Math.hypot(dx, dz) > 1e-5) moveHorizontal(dx, dz);
+    // Stay on our lot: the hedge line is an invisible boundary.
+    if (player.x < LOT.x0 + 0.4) { player.x = LOT.x0 + 0.4; player.vx = 0; }
+    if (player.x > LOT.x1 - 0.4) { player.x = LOT.x1 - 0.4; player.vx = 0; }
+    if (player.z < LOT.z0 + 0.4) { player.z = LOT.z0 + 0.4; player.vz = 0; }
+    if (player.z > LOT.z1 - 0.4) { player.z = LOT.z1 - 0.4; player.vz = 0; }
     player.speed = Math.hypot(player.vx, player.vz);
 
     // Ground: step up stairs smoothly, fall with gravity, refuse rises above the step limit.
@@ -1651,7 +1749,14 @@ float roomMask(int i, vec3 vRoomPos) {
     built.clock.userData.minuteHand.rotation.z = -((h % 1)) * Math.PI * 2;
     built.daylight = daylight;
     // Neighbours' windows: dark glass by day, warm lit panes at night.
-    if (built.neighbourhood) built.neighbourhood.windows.material.color.setRGB(0.30 + 0.70 * (1 - daylight), 0.36 + 0.44 * (1 - daylight), 0.46 + 0.10 * (1 - daylight));
+    if (built.neighbourhood) {
+      const nb = built.neighbourhood, night = 1 - daylight;
+      nb.windows.material.color.setRGB(0.30 + 0.70 * night, 0.36 + 0.44 * night, 0.46 + 0.10 * night);
+      // Street lamps come on as the light fades: heads glow, pools appear on the road, the two near lights rise.
+      nb.heads.material.color.setRGB(0.33 + 0.67 * night, 0.33 + 0.55 * night, 0.33 + 0.25 * night);
+      nb.pools.material.opacity = 0.6 * night;
+      for (const l of nb.lampLights) l.intensity = 40 * night;
+    }
     const { sun, sky, moon, hemi, houseCenter } = built;
     const sunUp = sunElev > -0.02;
     const light = sunUp ? sunDir : moonDir;
