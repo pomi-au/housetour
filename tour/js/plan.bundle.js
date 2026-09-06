@@ -35919,7 +35919,97 @@ void main() {
       materialCache.set(cacheKey, m);
       return m;
     }
-    function collectSolids(json) {
+    function openingRects(json) {
+      const records = json.three_d_scene?.opening_cut_report?.opening_records || json.opening_cut_report?.opening_records || [];
+      const out = [];
+      for (const r of records) {
+        const rect = r.rect_mm, v = r.vertical_mm;
+        if (!Array.isArray(rect) || rect.length !== 4 || !Array.isArray(v) || v.length !== 2) continue;
+        out.push({
+          id: r.cut_id || r.label,
+          kind: r.kind || "",
+          label: r.label || "",
+          x0: Math.min(rect[0], rect[2]) / 1e3,
+          x1: Math.max(rect[0], rect[2]) / 1e3,
+          y0: Math.min(rect[1], rect[3]) / 1e3,
+          y1: Math.max(rect[1], rect[3]) / 1e3,
+          z0: Math.min(v[0], v[1]) / 1e3,
+          z1: Math.max(v[0], v[1]) / 1e3
+        });
+      }
+      return out;
+    }
+    function cutWallSegment(seg, id, material, openings) {
+      const ring = seg.geometry_model_xy_m?.coordinates?.[0];
+      const profile = seg.top_profile_model_xyz_m;
+      if (!Array.isArray(ring) || ring.length < 4 || !Array.isArray(profile) || !profile.length) return null;
+      let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
+      for (const [x, y] of ring) {
+        px0 = Math.min(px0, x);
+        px1 = Math.max(px1, x);
+        py0 = Math.min(py0, y);
+        py1 = Math.max(py1, y);
+      }
+      const area2 = Math.abs(ShapeUtils.area(ring.map(([x, y]) => new Vector2(x, y))));
+      if (area2 < (px1 - px0) * (py1 - py0) * 0.97) return null;
+      const alongX = px1 - px0 >= py1 - py0;
+      const A0 = alongX ? px0 : py0, A1 = alongX ? px1 : py1, B0 = alongX ? py0 : px0, B1 = alongX ? py1 : px1;
+      const bottom = Number(seg.bottom_z_m) || 0;
+      const cuts = [];
+      for (const o of openings) {
+        const ox0 = Math.max(px0, o.x0), ox1 = Math.min(px1, o.x1), oy0 = Math.max(py0, o.y0), oy1 = Math.min(py1, o.y1);
+        if (ox1 - ox0 < 5e-3 || oy1 - oy0 < 5e-3) continue;
+        const across = alongX ? oy1 - oy0 : ox1 - ox0;
+        if (across < (B1 - B0) * 0.5) continue;
+        cuts.push({ a0: alongX ? ox0 : oy0, a1: alongX ? ox1 : oy1, z0: o.z0, z1: o.z1 });
+      }
+      if (!cuts.length) return null;
+      cuts.sort((p, q) => p.a0 - q.a0);
+      const merged = [];
+      for (const c of cuts) {
+        const last = merged[merged.length - 1];
+        if (last && c.a0 < last.a1 - 1e-3) {
+          last.a1 = Math.max(last.a1, c.a1);
+          last.z0 = Math.min(last.z0, c.z0);
+          last.z1 = Math.max(last.z1, c.z1);
+        } else merged.push({ ...c });
+      }
+      const pts = profile.map((p) => [alongX ? p[0] : p[1], p[2]]).sort((p, q) => p[0] - q[0]);
+      const zTop = (x, y) => {
+        const t = alongX ? x : y;
+        if (t <= pts[0][0]) return pts[0][1];
+        for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) {
+          const [t0, z0] = pts[i - 1], [t1, z1] = pts[i];
+          return t1 - t0 < 1e-6 ? Math.max(z0, z1) : z0 + (z1 - z0) * (t - t0) / (t1 - t0);
+        }
+        return pts[pts.length - 1][1];
+      };
+      const topMin = Math.min(...pts.map((p) => p[1]));
+      const rect = (a0, a1) => alongX ? [[a0, B0], [a1, B0], [a1, B1], [a0, B1]] : [[B0, a0], [B1, a0], [B1, a1], [B0, a1]];
+      const pieces = [];
+      let n = 0;
+      const piece = (a0, a1, zLo, zHi) => {
+        if (a1 - a0 > 2e-3) pieces.push(prismSolid(`${id}-${++n}`, "wall_envelopes.cut", material, rect(a0, a1), zHi || zTop, () => zLo));
+      };
+      let cursor = A0;
+      for (const c of merged) {
+        if (c.a0 > cursor + 1e-3) piece(cursor, c.a0, bottom);
+        if (c.z1 < topMin - 5e-3) piece(c.a0, c.a1, c.z1);
+        if (c.z0 > bottom + 5e-3) piece(c.a0, c.a1, bottom, () => c.z0);
+        cursor = Math.max(cursor, c.a1);
+      }
+      if (cursor < A1 - 1e-3) piece(cursor, A1, bottom);
+      return pieces;
+    }
+    function glazingSolids(openings) {
+      return openings.filter((o) => /window|sliding|glass/.test(o.kind)).map((o) => {
+        const alongX = o.x1 - o.x0 >= o.y1 - o.y0;
+        const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2, t = 3e-3;
+        const contour = alongX ? [[o.x0, cy - t], [o.x1, cy - t], [o.x1, cy + t], [o.x0, cy + t]] : [[cx - t, o.y0], [cx + t, o.y0], [cx + t, o.y1], [cx - t, o.y1]];
+        return prismSolid(`${o.id}-glass`, "openings.glazing", "window_glass", contour, () => o.z1, () => o.z0);
+      });
+    }
+    function collectSolids(json, openings = []) {
       const out = [];
       const visit = (node, path, material) => {
         if (Array.isArray(node)) {
@@ -35930,10 +36020,16 @@ void main() {
         const mat = node.material_key || material;
         const mesh = node.mesh;
         if (mesh && Array.isArray(mesh.vertices_m) && Array.isArray(mesh.triangle_indices)) {
-          out.push({ id: node.slab_id || node.footing_id || node.segment_id || node.wall_leaf_id || node.component_id || node.id || path, list: path, material: mat || "default", mesh, top: node.top_z_m, bottom: node.bottom_z_m });
+          const id = node.slab_id || node.footing_id || node.segment_id || node.wall_leaf_id || node.component_id || node.id || path;
+          const cut = openings.length && node.top_profile_model_xyz_m ? cutWallSegment(node, id, mat || "default", openings) : null;
+          if (cut) {
+            out.push(...cut);
+            return;
+          }
+          out.push({ id, list: path, material: mat || "default", mesh, top: node.top_z_m, bottom: node.bottom_z_m });
           return;
         }
-        for (const [k, v] of Object.entries(node)) if (k !== "inputs" && k !== "material_library" && k !== "artifacts") visit(v, path ? `${path}.${k}` : k, mat);
+        for (const [k, v] of Object.entries(node)) if (k !== "inputs" && k !== "material_library" && k !== "artifacts" && k !== "three_d_scene") visit(v, path ? `${path}.${k}` : k, mat);
       };
       visit(json, "", null);
       return out.concat(roofSolids(json));
@@ -36120,8 +36216,14 @@ void main() {
       built = null;
     }
     function buildModel(layers2) {
-      const solids = layers2.flatMap((l) => collectSolids(l.json).map((s) => ({ ...s, layer: l.name })));
-      if (!solids.length) throw new Error("No mesh, roof surface or eave line found");
+      const openings = layers2.flatMap((l) => openingRects(l.json));
+      const solids = layers2.flatMap((l) => collectSolids(l.json, openings).map((s) => ({ ...s, layer: l.name })));
+      solids.push(...glazingSolids(openings).map((s) => ({ ...s, layer: "openings" })));
+      if (!solids.length) {
+        const stage = layers2[layers2.length - 1].json;
+        if (/^foma\.005_04\./.test(stage.schema || "") && !openingRects(stage).length) throw new Error("this index file has no geometry; load the 005_04a \u2026_final_setout_2d_3d_B.json file, which holds the opening cut list");
+        throw new Error("No mesh, roof surface, eave line or opening found");
+      }
       const name = layers2.map((l) => l.name).join(" + ");
       const materials = Object.assign({}, ...layers2.map((l) => l.json.materials || {}));
       const usage = new Map(layers2.flatMap((l) => l.json.material_library?.materialUsage || []).map((u) => [u.materialKey, u]));
@@ -36248,7 +36350,7 @@ void main() {
       built = { root, meshes, reflector, floorTop, groundY, box, triangles, name, solids: solids.length };
       lastSunUpdate = -1;
       applyQuality();
-      modelName.textContent = `${name} \xB7 ${solids.length} solids \xB7 ${triangles} triangles`;
+      modelName.textContent = `${name} \xB7 ${solids.length} solids \xB7 ${triangles} triangles${openings.length ? ` \xB7 ${openings.length} openings` : ""}`;
       document.title = `${layers2[0].name} \xB7 Plan model`;
       console.info(`[plan] model: ${solids.length} solids, ${triangles} triangles, floor at ${floorTop.toFixed(3)} m`);
       return built;

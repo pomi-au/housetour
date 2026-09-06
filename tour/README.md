@@ -39,6 +39,7 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 | Slab and footing `005_01` | `foma.005_01.slab-footing-model.v1` | Triangle meshes of the slab and the footing. The highest slab top is the walking floor. |
 | Wall envelopes `005_03` | `foma.005_03.wall-envelope-model.v1` | Triangle mesh of every wall segment; the material key comes from the enclosing wall leaf (face brick, common brick, steel frame). |
 | Roof envelope `005_02` | `foma.005_02.roof-envelope-model.v1` | Each underside surface is a plane over its outline, built as a 50 mm roof prism; every eave height line gets a fascia board. |
+| Openings `005_04a …_final_setout_2d_3d_B.json` | `foma.005_04a.final_setout_2d_3d.v1` | The opening cut list (`three_d_scene.opening_cut_report.opening_records`: plan rectangle and vertical interval in millimetres). Every wall segment an opening crosses is rebuilt from its plan rectangle and top profile as pieces around the hole; windows and sliding doors get a glass pane. The small `005_04_…_openings_frames_masonry.json` index holds no geometry. |
 
 Any other JSON whose entries carry `mesh.vertices_m`, `mesh.triangle_indices` and a `material_key` loads as well. Choose the files in the panel, drop them on the page, or open `model.html?src=slab.json,walls.json,roof.json`. The Load JSON button adds more layers; Clear model starts again.
 
