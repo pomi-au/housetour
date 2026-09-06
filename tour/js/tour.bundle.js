@@ -37346,7 +37346,7 @@ void main() {
       shadowSize: 512,
       aoSamples: 8,
       lessOften: true,
-      lights: 8,
+      lights: 99,
       haloLights: true,
       physical: false,
       cell: 8,

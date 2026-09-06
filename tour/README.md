@@ -35,7 +35,7 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 | Switch | Default | Effect |
 | --- | --- | --- |
 | `dpr` | 1.25 (1 on touch) | Cap on the device pixel ratio. |
-| `lights` | 8 | Fixtures lit at once: the nearest ones. Needs a rebuild of the walk scene. |
+| `lights` | 99 | Cap on fixtures lit at once. 99 lights every fixture on the current level; a lower value keeps only the nearest. Needs a rebuild of the walk scene. |
 | `haloLights` | on | A soft point light under each fixture. Off uses a wider, softer cone instead. |
 | `shadowSpots` | 3 (2 on touch) | Fixtures with real shadow maps; the rest are confined by their room box. |
 | `reflection`, `reflectEvery` | 0.3, 2 | Floor reflection target scale and refresh interval in frames. |

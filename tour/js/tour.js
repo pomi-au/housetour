@@ -55,13 +55,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // dpr: cap on the device pixel ratio (screens above 2 show no difference). lessOften: skip the environment
   // cube map and the reflector renders while nothing on screen changes, and spread the cube map one face per frame.
   const TOUCH = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
-  // lights: fixtures lit at once (the nearest); haloLights: a point light under each fixture (off: wider cone
+  // lights: cap on fixtures lit at once (99 = every fixture on the current level, nothing fades by distance); haloLights: a point light under each fixture (off: wider cone
   // instead); physical: MeshPhysicalMaterial for flat paints (off: the cheaper standard shader, same look);
   // cell: draw-bucket size in metres; cull: hide the other level's interior away from the stair; direct: draw
   // straight to the canvas when ambient occlusion is off (no post-processing pass); reflectEvery: floor
   // reflection refresh interval in frames.
   const RENDER = { dpr: TOUCH ? 1 : 1.25, msaa: 2, reflection: 0.3, reflectEvery: 2, ao: false, sunShadow: 1024, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, aoSamples: 8, lessOften: true,
-    lights: 8, haloLights: true, physical: false, cell: 8, cull: true, direct: true };   // O toggles ambient occlusion
+    lights: 99, haloLights: true, physical: false, cell: 8, cull: true, direct: true };   // O toggles ambient occlusion
   // Every fixture on the current level gets its own light, so nothing switches on or off while you walk a floor.
   // (The other level's fixtures sit behind its slab; the room mask keeps them out anyway.)
   const SPOT_POOL = Math.min(RENDER.lights, Math.max(1, ...['upper', 'ground'].map(level => R.ceilingLEDs.filter(led => led.state.level === level).length)));
