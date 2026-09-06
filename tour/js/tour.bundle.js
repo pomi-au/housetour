@@ -37826,6 +37826,85 @@ float roomMask(int i, vec3 vRoomPos) {
       add(new BoxGeometry(0.075, 0.012, 0.03), 0, -0.065, 0.075, dark);
       return g;
     }
+    function boneKit(g, bone) {
+      const add = (geo, x, y, z, mat = bone) => {
+        const m = new Mesh(geo, mat);
+        m.position.set(x, y, z);
+        m.castShadow = true;
+        g.add(m);
+        return m;
+      };
+      const V = (x, y, z) => new Vector3(x, y, z);
+      const link = (a, b, r) => {
+        const d = b.clone().sub(a), len = d.length();
+        const m = new Mesh(new CylinderGeometry(r, r * 0.85, len, 8), bone);
+        m.position.copy(a).lerp(b, 0.5);
+        m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+        m.castShadow = true;
+        g.add(m);
+        return m;
+      };
+      const joint = (p, r) => add(new SphereGeometry(r, 10, 8), p.x, p.y, p.z);
+      return { add, V, link, joint };
+    }
+    function buildBathingSkeleton(halfWidth = 0.34) {
+      const g = new Group();
+      const bone = boneMaterial();
+      const { add, V, link, joint } = boneKit(g, bone);
+      const pelvis = V(0, 0.1, 0.12);
+      const up = V(0, Math.sin(0.95), -Math.cos(0.95)).normalize();
+      const pel = add(new TorusGeometry(0.12, 0.022, 8, 24), pelvis.x, pelvis.y, pelvis.z);
+      pel.rotation.x = Math.PI / 2;
+      pel.scale.z = 0.6;
+      const spineTop = pelvis.clone().addScaledVector(up, 0.52);
+      for (let i = 0; i < 18; i++) {
+        const p = pelvis.clone().addScaledVector(up, 0.03 + i * 0.028);
+        const v = add(new CylinderGeometry(0.022, 0.022, 0.02, 8), p.x, p.y, p.z);
+        v.quaternion.setFromUnitVectors(V(0, 1, 0), up);
+      }
+      const front = V(0, up.z, -up.y).negate();
+      const ribs = [0.1, 0.125, 0.14, 0.15, 0.15, 0.145, 0.13, 0.11];
+      ribs.forEach((r, i) => {
+        const p = pelvis.clone().addScaledVector(up, 0.19 + i * 0.038).addScaledVector(front, 0.02);
+        const ring = add(new TorusGeometry(r, 7e-3, 6, 28), p.x, p.y, p.z);
+        ring.quaternion.setFromUnitVectors(V(0, 0, 1), up);
+        ring.scale.y = 0.7;
+      });
+      const st = pelvis.clone().addScaledVector(up, 0.33).addScaledVector(front, 0.125);
+      const sternum = add(new BoxGeometry(0.03, 0.26, 0.015), st.x, st.y, st.z);
+      sternum.quaternion.setFromUnitVectors(V(0, 1, 0), up);
+      const neck = spineTop.clone();
+      link(neck, neck.clone().add(V(-0.18, -0.02, 0)), 8e-3);
+      link(neck, neck.clone().add(V(0.18, -0.02, 0)), 8e-3);
+      const skull = buildSkull(bone);
+      skull.position.copy(spineTop.clone().addScaledVector(up, 0.1));
+      skull.rotation.x = -0.35;
+      g.add(skull);
+      for (const sgn of [-1, 1]) {
+        const sh = neck.clone().add(V(sgn * 0.19, -0.03, 0.01));
+        const el = V(sgn * (halfWidth + 0.02), 0.36, 0.08);
+        const wr = V(sgn * (halfWidth + 0.03), 0.35, 0.34);
+        joint(sh, 0.03);
+        link(sh, el, 0.016);
+        joint(el, 0.024);
+        link(el, wr, 0.011);
+        link(el.clone().add(V(sgn * 0.01, 0.01, 0)), wr.clone().add(V(sgn * 6e-3, 8e-3, 0)), 8e-3);
+        const hand = add(new BoxGeometry(0.055, 0.016, 0.08), wr.x, wr.y, wr.z + 0.05);
+        for (let f = 0; f < 4; f++) {
+          const fg = add(new CylinderGeometry(5e-3, 4e-3, 0.07, 6), wr.x - 0.02 + f * 0.013, wr.y, wr.z + 0.125);
+          fg.rotation.x = Math.PI / 2;
+        }
+        const hip = V(sgn * 0.09, 0.11, 0.15), kn = V(sgn * 0.1, 0.34, 0.52), an = V(sgn * 0.09, 0.05, 0.92);
+        joint(hip, 0.03);
+        link(hip, kn, 0.02);
+        joint(kn, 0.032);
+        link(kn, an, 0.016);
+        link(kn.clone().add(V(sgn * 0.02, 0, 0)), an.clone().add(V(sgn * 0.015, 0, 0)), 8e-3);
+        joint(an, 0.022);
+        add(new BoxGeometry(0.075, 0.04, 0.2), an.x, 0.035, an.z + 0.06);
+      }
+      return g;
+    }
     function buildSkeleton() {
       const g = new Group();
       const bone = boneMaterial();
@@ -38502,12 +38581,11 @@ float roomMask(int i, vec3 vRoomPos) {
         const door = R.openingInteractions.find((st) => st.id === "D04");
         if (shell && door) {
           const [lo, hi] = shell.shadowBounds;
-          const len = hi[2] - lo[2];
-          tubSkeleton = buildSkeleton();
-          const k = Math.min(0.9, (len - 0.1) / 1.7);
+          const len = hi[2] - lo[2], width = hi[0] - lo[0];
+          tubSkeleton = buildBathingSkeleton(width / 2);
+          const k = Math.min(1, (len - 0.15) / 1.35);
           tubSkeleton.scale.setScalar(k);
-          tubSkeleton.rotation.x = -Math.PI / 2;
-          tubSkeleton.position.set((lo[0] + hi[0]) / 2, itemY(shell, lo[1]) + 0.05, hi[2] - 0.06);
+          tubSkeleton.position.set((lo[0] + hi[0]) / 2, itemY(shell, lo[1]) + 0.03, lo[2] + 0.4 * k);
           tubSkeleton.userData.door = door;
           tubSkeleton.visible = door.progress > 0.02;
           root.add(tubSkeleton);
