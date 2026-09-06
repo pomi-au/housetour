@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="img" aria-labelledby="title desc">
+  <title id="title">Kevmor SFSB60M brass stair nosing sectional reference</title>
+  <desc id="desc">A one-piece 2.5 millimetre extruded brass profile with a 60 millimetre grooved tread and a rounded 15 millimetre front return.</desc>
+  <defs>
+    <linearGradient id="brass" x1="0" y1="0" x2="0.8" y2="1">
+      <stop stop-color="#f0d399"/><stop offset="0.35" stop-color="#b58d50"/><stop offset="0.7" stop-color="#7a5729"/><stop offset="1" stop-color="#d5b06d"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse"><path d="M8 0 0 4l8 4Z" fill="#23241f"/></marker>
+  </defs>
+  <rect width="720" height="420" rx="32" fill="#f7f4ee"/>
+  <text x="44" y="58" fill="#23241f" font-family="Bahnschrift,Arial,sans-serif" font-size="25" letter-spacing="2">SFSB60M BRASS STAIR NOSING</text>
+  <text x="44" y="87" fill="#74766f" font-family="Arial,sans-serif" font-size="15">Kevmor reference STANOSIFB60 · one-piece extrusion</text>
+  <path d="M175 192H555v17H224c-19 0-31 13-31 31v60c0 15-10 26-22 26s-22-11-22-26v-67c0-23 8-41 26-41Z" fill="url(#brass)" stroke="#5c4121" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M230 192v17M264 192v17M298 192v17M332 192v17M366 192v17M400 192v17" stroke="#5c4121" stroke-width="7"/>
+  <path d="M175 125v39M555 125v39M175 145h380" fill="none" stroke="#23241f" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="341" y="133" fill="#23241f" font-family="Arial,sans-serif" font-size="18" font-weight="700">60 mm</text>
+  <path d="M103 192H76M103 326H76M88 192v134" fill="none" stroke="#23241f" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="42" y="267" fill="#23241f" font-family="Arial,sans-serif" font-size="18" font-weight="700" transform="rotate(-90 42 267)">15 mm</text>
+  <path d="M510 178v31" stroke="#23241f" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="526" y="199" fill="#23241f" font-family="Arial,sans-serif" font-size="16" font-weight="700">2.5 mm</text>
+  <text x="44" y="378" fill="#b58d69" font-family="Bahnschrift,Arial,sans-serif" font-size="14" letter-spacing="1.2">P5 · 3.6 LM · SOLID CARPET ≤ 7 MM, NO UNDERLAY</text>
+</svg>

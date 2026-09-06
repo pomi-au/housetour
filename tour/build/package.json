@@ -1,0 +1,16 @@
+{
+  "name": "residence-tour-build",
+  "private": true,
+  "description": "Bundles tour/js/tour.js (three.js walking mode) into tour/js/tour.bundle.js so the page works from file://.",
+  "scripts": {
+    "build": "NODE_PATH=./node_modules esbuild ../js/tour.js --bundle --format=iife --target=es2020 --outfile=../js/tour.bundle.js --legal-comments=none && node stamp.mjs",
+    "watch": "NODE_PATH=./node_modules esbuild ../js/tour.js --bundle --format=iife --target=es2020 --outfile=../js/tour.bundle.js --watch"
+  },
+  "dependencies": {
+    "three": "0.170.0",
+    "three-mesh-bvh": "0.8.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2"
+  }
+}

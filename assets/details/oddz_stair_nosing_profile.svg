@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="img" aria-labelledby="title desc">
+  <title id="title">Oddz wood-look stair nosing profile reference</title>
+  <desc id="desc">Schematic comparison of Junior and Senior vinyl-wrapped wood-look stair nosing profiles, showing fourteen millimetre top coverage, supported floor heights, and three point four metre supplied length.</desc>
+  <defs>
+    <linearGradient id="woodBase" x1="0" y1="0" x2="1" y2="0.8">
+      <stop stop-color="#cda774"/>
+      <stop offset="0.38" stop-color="#a97b49"/>
+      <stop offset="0.7" stop-color="#d0aa72"/>
+      <stop offset="1" stop-color="#8d623b"/>
+    </linearGradient>
+    <pattern id="wood" width="82" height="30" patternUnits="userSpaceOnUse">
+      <rect width="82" height="30" fill="url(#woodBase)"/>
+      <path d="M-8 8C13 1 27 15 52 8S83 5 94 10M-5 21c22-9 39 5 61-2s32-4 42 0M18 0c9 8 17 9 27 4" fill="none" stroke="#724b2d" stroke-opacity=".38" stroke-width="1.5"/>
+      <path d="M4 13c22-6 35 6 59-1M31 27c12-5 25-4 42 1" fill="none" stroke="#eed1a1" stroke-opacity=".42"/>
+    </pattern>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#ded9cf"/>
+      <stop offset="1" stop-color="#aaa79f"/>
+    </linearGradient>
+    <filter id="profileShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#33281f" flood-opacity=".16"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse">
+      <path d="M8 0 0 4l8 4Z" fill="#23241f"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="420" rx="32" fill="#f7f4ee"/>
+  <text x="44" y="56" fill="#23241f" font-family="Bahnschrift,Arial,sans-serif" font-size="24" letter-spacing="2.1">ODDZ STAIR NOSING TRIM</text>
+  <text x="44" y="85" fill="#74766f" font-family="Arial,sans-serif" font-size="15">Vinyl-wrapped wood colour · Junior and Senior floor-height profiles</text>
+
+  <g aria-label="Junior profile">
+    <rect x="52" y="112" width="292" height="230" rx="18" fill="#fbfaf7" stroke="#ded9d0"/>
+    <text x="72" y="143" fill="#23241f" font-family="Bahnschrift,Arial,sans-serif" font-size="17" font-weight="700" letter-spacing="1.2">JUNIOR</text>
+    <text x="72" y="164" fill="#74766f" font-family="Arial,sans-serif" font-size="12">5.5 / 6.5 / 8.4 mm floor fit</text>
+
+    <rect x="262" y="213" width="57" height="24" rx="2" fill="url(#floor)" stroke="#696b66" stroke-width="2"/>
+    <path d="M77 195H285V211H279V241H265V212H101V295H81V221c0-10-1-18-4-26Z" fill="url(#wood)" stroke="#5e432f" stroke-width="3" stroke-linejoin="round" filter="url(#profileShadow)"/>
+    <path d="M104 202h142M104 207h142" stroke="#ead0a7" stroke-opacity=".48"/>
+
+    <path d="M265 176v13M285 176v13M265 182h20" fill="none" stroke="#23241f" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="275" y="171" text-anchor="middle" fill="#23241f" font-family="Arial,sans-serif" font-size="12" font-weight="700">14 mm</text>
+    <text x="275" y="256" text-anchor="middle" fill="#74766f" font-family="Arial,sans-serif" font-size="11">TOP COVERAGE</text>
+    <path d="M326 213h8M326 237h8M331 213v24" fill="none" stroke="#23241f" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  </g>
+
+  <g aria-label="Senior profile">
+    <rect x="376" y="112" width="292" height="230" rx="18" fill="#fbfaf7" stroke="#ded9d0"/>
+    <text x="396" y="143" fill="#23241f" font-family="Bahnschrift,Arial,sans-serif" font-size="17" font-weight="700" letter-spacing="1.2">SENIOR</text>
+    <text x="396" y="164" fill="#74766f" font-family="Arial,sans-serif" font-size="12">14 mm floor fit</text>
+
+    <rect x="586" y="213" width="57" height="43" rx="2" fill="url(#floor)" stroke="#696b66" stroke-width="2"/>
+    <path d="M401 195H609V211H603V260H589V212H425V309H405V221c0-10-1-18-4-26Z" fill="url(#wood)" stroke="#5e432f" stroke-width="3" stroke-linejoin="round" filter="url(#profileShadow)"/>
+    <path d="M428 202h142M428 207h142" stroke="#ead0a7" stroke-opacity=".48"/>
+
+    <path d="M589 176v13M609 176v13M589 182h20" fill="none" stroke="#23241f" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="599" y="171" text-anchor="middle" fill="#23241f" font-family="Arial,sans-serif" font-size="12" font-weight="700">14 mm</text>
+    <text x="599" y="275" text-anchor="middle" fill="#74766f" font-family="Arial,sans-serif" font-size="11">TOP COVERAGE</text>
+    <path d="M650 213h8M650 256h8M655 213v43" fill="none" stroke="#23241f" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  </g>
+
+  <text x="44" y="382" fill="#a47c55" font-family="Bahnschrift,Arial,sans-serif" font-size="14" letter-spacing="1.2">3.4 M LENGTH · DOMESTIC / COMMERCIAL · SCHEMATIC SECTION</text>
+  <text x="676" y="382" text-anchor="end" fill="#74766f" font-family="Arial,sans-serif" font-size="11">Not to scale</text>
+</svg>

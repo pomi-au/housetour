@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1c1e1d">
+  <meta name="description" content="Residence 3D model with a first-person virtual tour. Click any floor to walk inside; press Escape to exit.">
+  <title>Residence Virtual Tour</title>
+  <!-- Original model engine styles, then the tour overrides that remove every panel. -->
+  <link rel="stylesheet" href="tour/css/residence.css?v=mtprz206">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtprz206">
+</head>
+<body data-tour-mode="overview">
+  <!-- Overview: the original custom WebGL renderer draws into #scene. -->
+  <main id="app" data-ui-mode="client" aria-label="Residence three-dimensional model">
+    <div id="viewport">
+      <canvas id="scene" tabindex="0" aria-label="Interactive three-dimensional residence. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to start the walking tour."></canvas>
+      <div id="labels" aria-hidden="true"></div>
+    </div>
+    <div id="fatal" role="alert"></div>
+  </main>
+
+  <!-- Walking tour: three.js physically based renderer draws into #tour-scene. -->
+  <canvas id="tour-scene" aria-label="First-person walking view"></canvas>
+  <div id="tour-fade" data-active="false"></div>
+  <div id="tour-hud">
+    <div id="tour-title">Residence · virtual tour</div>
+    <div id="tour-stats"></div>
+    <div id="tour-crosshair" data-target="false"></div>
+    <div id="tour-target"></div>
+    <div id="tour-loading" data-active="false">Preparing walking view…</div>
+    <button id="tour-exit" type="button">Exit tour · Esc</button>
+    <div id="tour-mobile" aria-label="Touch controls">
+      <button type="button" data-move="back" aria-label="Walk backward">&#9660;</button>
+      <button type="button" data-use aria-label="Use door or switch">Use</button>
+      <button type="button" data-move="forward" aria-label="Walk forward">&#9650;</button>
+    </div>
+    <form id="tour-tune" hidden>
+      <div class="tune-head"><strong>Lighting</strong><span>T to close · click view to look again</span></div>
+      <label>Downlight power <input type="range" name="power" min="0" max="40" step="0.5"><output></output></label>
+      <label>Downlight halo <input type="range" name="halo" min="0" max="0.6" step="0.01"><output></output></label>
+      <label>Floor light <input type="range" name="floor" min="0" max="2" step="0.05"><output></output></label>
+      <label>Wall light <input type="range" name="wall" min="0" max="2" step="0.05"><output></output></label>
+      <label>Daylight base <input type="range" name="base" min="0" max="2" step="0.05"><output></output></label>
+      <label>Exposure <input type="range" name="exposure" min="0.4" max="2" step="0.02"><output></output></label>
+      <label>Window reflection <input type="range" name="glass" min="0" max="4" step="0.1"><output></output></label>
+      <label>Time of day <input type="range" name="hour" min="0" max="24" step="0.1"><output></output></label>
+      <label class="tune-check"><input type="checkbox" name="clock" checked> Clock runs · 2.5 s = 1 hour</label>
+      <label class="tune-check"><input type="checkbox" name="cones"> Show downlight cones (H)</label>
+      <button type="button" data-reset>Reset</button>
+    </form>
+    <div id="tour-hint" data-hidden="false">Click any floor to walk inside · <kbd>1</kbd> ground · <kbd>2</kbd> upper · <kbd>3</kbd> both</div>
+  </div>
+
+  <!-- Code: procedural foley, the model engine, then the tour bundle (three.js + the tour source). -->
+  <script>window.__RESIDENCE_PAUSED__ = true;   /* the tour resumes drawing once it has set the intro pose */</script>
+  <script src="tour/js/residence-sound.js?v=mtprz206"></script>
+  <script src="tour/js/residence-model.js?v=mtprz206"></script>
+  <script src="tour/js/tour.bundle.js?v=mtprz206"></script>
+</body>
+</html>

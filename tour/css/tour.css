@@ -1,0 +1,242 @@
+/* Virtual tour page: full-window 3D view, no panels, walking-mode HUD. */
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #b3b5b0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+#app {
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  height: 100dvh !important;
+}
+
+#viewport {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+#scene {
+  display: block;
+  position: absolute;
+  inset: 0;
+  border-radius: 0 !important;
+}
+
+#labels { display: none !important; }
+#fatal:empty { display: none; }
+
+/* Walking-mode renderer sits over the overview canvas. */
+#tour-scene {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+  cursor: none;
+}
+body[data-tour-mode="walk"] #tour-scene { display: block; }
+body[data-tour-mode="walk"] #scene { visibility: hidden; }
+
+#tour-fade {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .45s ease;
+  z-index: 20;
+}
+#tour-fade[data-active="true"] { opacity: 1; }
+
+#tour-hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  color: #f4f2ec;
+  font-size: 13px;
+  letter-spacing: .01em;
+}
+
+#tour-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(20, 22, 21, .62);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  white-space: nowrap;
+  transition: opacity .6s ease;
+}
+#tour-hint[data-hidden="true"] { opacity: 0; }
+#tour-hint kbd {
+  font: inherit;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .14);
+}
+
+#tour-title {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: rgba(20, 22, 21, .55);
+}
+body[data-tour-mode="walk"] #tour-title { color: rgba(244, 242, 236, .55); }
+
+#tour-stats {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: rgba(244, 242, 236, .7);
+  text-align: right;
+  display: none;
+}
+body[data-tour-mode="walk"] #tour-stats { display: block; }
+
+#tour-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+  display: none;
+}
+body[data-tour-mode="walk"] #tour-crosshair { display: block; }
+#tour-crosshair[data-target="true"] {
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: rgba(255, 220, 150, .95);
+}
+
+#tour-target {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 22px);
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(20, 22, 21, .6);
+  font-size: 12px;
+  display: none;
+}
+#tour-target:not(:empty) { display: block; }
+
+#tour-exit {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 999px;
+  padding: 7px 14px;
+  background: rgba(20, 22, 21, .6);
+  color: #f4f2ec;
+  font: inherit;
+  cursor: pointer;
+  display: none;
+}
+body[data-tour-mode="walk"] #tour-exit { display: block; }
+#tour-exit:hover { background: rgba(20, 22, 21, .85); }
+
+#tour-loading {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: rgba(20, 22, 21, .75);
+  display: none;
+}
+#tour-loading[data-active="true"] { display: block; }
+
+#tour-tune {
+  position: absolute;
+  right: 20px;
+  top: 52px;
+  width: 260px;
+  padding: 12px 14px 10px;
+  border-radius: 10px;
+  background: rgba(20, 22, 21, .82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: auto;
+  font-size: 12px;
+  display: grid;
+  gap: 8px;
+}
+#tour-tune[hidden] { display: none; }
+#tour-tune .tune-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+#tour-tune .tune-head span { color: rgba(244, 242, 236, .55); font-size: 11px; }
+#tour-tune label { display: grid; grid-template-columns: 1fr 44px; align-items: center; gap: 4px 8px; }
+#tour-tune input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: #ffc866; }
+#tour-tune output { text-align: right; font-variant-numeric: tabular-nums; color: rgba(244, 242, 236, .8); }
+#tour-tune button {
+  justify-self: start;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#tour-tune .tune-check { grid-template-columns: auto 1fr; justify-content: start; }
+#tour-tune .tune-check input { width: auto; grid-column: auto; margin: 0; }
+
+/* Touch devices: on-screen walk buttons. Drag looks, pinch zooms, tap uses doors and switches. */
+#tour-mobile {
+  position: absolute;
+  left: max(18px, calc(env(safe-area-inset-left) + 18px));
+  bottom: max(70px, calc(env(safe-area-inset-bottom) + 70px));
+  display: none;
+  flex-direction: column-reverse;   /* forward on top, backward at the bottom, Use between */
+  gap: 14px;
+  pointer-events: auto;
+  touch-action: none;
+}
+body[data-touch="true"][data-tour-mode="walk"] #tour-mobile { display: flex; }
+#tour-mobile button {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(20, 22, 21, .62);
+  color: #f4f2ec;
+  font: inherit;
+  font-size: 22px;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+#tour-mobile button[data-use] { font-size: 15px; font-weight: 600; }
+#tour-mobile button[data-active="true"] { background: rgba(255, 200, 102, .75); color: #1c1e1d; }
+body[data-touch="true"] #tour-tune { width: min(260px, calc(100vw - 40px)); }

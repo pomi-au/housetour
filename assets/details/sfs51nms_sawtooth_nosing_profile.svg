@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="img" aria-labelledby="title desc">
+  <title id="title">DTA ASN51NMS sawtooth stair nosing sectional reference</title>
+  <desc id="desc">A matt silver anodised stair-edge profile with fifty millimetres of sawtooth tread coverage, suitable for protecting carpet, vinyl, timber or tile edges.</desc>
+  <defs>
+    <linearGradient id="silver" x1="0" y1="0" x2="1" y2="0.7">
+      <stop stop-color="#777d7c"/>
+      <stop offset="0.28" stop-color="#edf0ef"/>
+      <stop offset="0.55" stop-color="#a4aaa8"/>
+      <stop offset="0.82" stop-color="#f7f8f7"/>
+      <stop offset="1" stop-color="#858b89"/>
+    </linearGradient>
+    <pattern id="saw" width="18" height="14" patternUnits="userSpaceOnUse">
+      <rect width="18" height="14" fill="url(#silver)"/>
+      <path d="M0 12 4 3l4 9 4-9 4 9 2-5" fill="none" stroke="#5f6664" stroke-width="1.5"/>
+    </pattern>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse">
+      <path d="M8 0 0 4l8 4Z" fill="#23241f"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-30%" width="150%" height="180%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#23241f" flood-opacity=".18"/>
+    </filter>
+  </defs>
+
+  <rect width="720" height="420" rx="32" fill="#f7f4ee"/>
+  <text x="44" y="57" fill="#23241f" font-family="Bahnschrift,Arial,sans-serif" font-size="24" letter-spacing="1.8">ASN51NMS / SFS51NMS SAWTOOTH NOSING</text>
+  <text x="44" y="86" fill="#74766f" font-family="Arial,sans-serif" font-size="15">DTA profile · supplied by Kevmor · matt silver anodised aluminium</text>
+
+  <g filter="url(#shadow)">
+    <path d="M145 205H555v18H199l-8 7v27l-10 8-10-8v-36c0-10-9-16-26-16Z" fill="url(#silver)" stroke="#59605e" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M199 205H555v15H199Z" fill="url(#saw)" opacity=".96"/>
+  </g>
+  <path d="M218 205v18M242 205v18M266 205v18M290 205v18M314 205v18M338 205v18M362 205v18M386 205v18M410 205v18M434 205v18M458 205v18M482 205v18M506 205v18M530 205v18" stroke="#656b69" stroke-width="2" opacity=".8"/>
+
+  <path d="M199 137v40M555 137v40M199 157h356" fill="none" stroke="#23241f" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="377" y="145" text-anchor="middle" fill="#23241f" font-family="Arial,sans-serif" font-size="18" font-weight="700">50 mm tread coverage</text>
+
+  <path d="M180 292v-20M180 292h-20" fill="none" stroke="#5e6462" stroke-width="2"/>
+  <path d="M194 274c45 25 97 35 156 35" fill="none" stroke="#83786e" stroke-width="11" stroke-linecap="round"/>
+  <text x="367" y="314" fill="#6f716c" font-family="Arial,sans-serif" font-size="13">continuous carpet upturn terminates behind the front edge</text>
+
+  <text x="44" y="378" fill="#68706d" font-family="Bahnschrift,Arial,sans-serif" font-size="14" letter-spacing="1.1">3.66 M · P5 · COUNTERSUNK AT 200 MM · SCHEMATIC SECTION</text>
+  <text x="676" y="378" text-anchor="end" fill="#74766f" font-family="Arial,sans-serif" font-size="11">Vertical detail not dimensioned</text>
+</svg>
