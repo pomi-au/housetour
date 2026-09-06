@@ -34,15 +34,22 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 
 `model.html` shows a house model JSON instead of the coded residence. It loads one file of schema `pomi.house_model.v1`: choose it in the panel, drop it on the page, or open `model.html?src=path/to/house_model.json`.
 
-| Part of the file | What is built |
+The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it (the click looks through the roof and walls for the slab). Doors and sliding doors open on click, `E` or a tap, with the tour's lime outline on the one under the crosshair; a door swings away from the walker. The walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. The model is centred on the lawn; the lot, hedge and street pitch grow with it.
+
+The viewer is `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; it only orchestrates. Every surface, material and fixture is a reusable function in its own module:
+
+| Module | Functions |
 | --- | --- |
-| `elements` (slab, footing, wall, roof; vertices and faces in plan metres, z up from the slab top) | Meshes with the tour's finishes by material family and finish: concrete, face brick, rendered masonry, steel, roof sheet. The slab top is the walking floor. |
-| `fixtures` (doors and windows: centre, rotation, width, depth, sill, head) | Every rectangular wall a fixture crosses is rebuilt as pieces around the hole (between, above, below). Windows and sliding doors get a glass pane. Doors stay open. |
-| `guides.eave_height_lines` | A fascia board along every eave line. |
+| `tour/js/model/materials.js` | `createMaterials({ renderer })` returns the tour's finishes: `materialFor(key, spec, finish)` by material family and finish (concrete, face brick, render, paint, carpet, tile, timber, metal, roof sheet, fascia, glass), `finishes.*` one function each, `fixtures` (frame, glass, sill, paint, metal), `grassTexture()`, `streetTexture()`, `lightPoolTexture()`, `setGlass(strength)`. All textures are canvases made at run time. |
+| `tour/js/model/surfaces.js` | `buildSlab`, `buildFooting`, `buildRoof`, `buildWall(el, openings, material, frame)` (a rectangular wall crossed by openings is rebuilt as pieces around the holes), `buildFascia(eaveLine)`, `buildGlazing(opening)`, `openingBoxes(fixtures)`, `floorTriangles(mesh, y)`, `meshFromFaces`, `prism`. Plan metres in, world meshes out, centred by `frame = { cx, cy }`. |
+| `tour/js/fixtures/hinged-door.js` | `extractStandardDoor(window.RESIDENCE)` reads the tour's door D04 (Metro 95 frame, leaf, hinges, lever set) from the residence engine, which `model.html` loads hidden and paused. `createHingedDoor({ model, width, hinge: 'L' or 'R', position, rotationDeg, materials })` places it at any width: the hinge half keeps its shape, the strike half shifts. `openingFor(model, width)` is the wall opening the frame needs. `fixture.toggle(sideSign)` swings the leaf. |
+| `tour/js/fixtures/window.js` | `createWindow({ width, height, depth, position, rotationDeg, materials })`: aluminium frame, mullions, glass, sill. |
+| `tour/js/fixtures/sliding-door.js` | `createSlidingDoor({ width, height, depth, position, rotationDeg, materials, slide })`: frame, glazed panels, one slides on `toggle()`. |
+| `tour/js/fixtures/common.js` | `placeFixture(group, position, rotationDeg)`, `box`, `motion`, `defaultMaterials`. |
 
-The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it (the click looks through the roof and walls for the slab). The walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. The model is centred on the lawn; the lot, hedge and street pitch grow with it.
+Fixture convention: local x runs along the opening width, y up, z across the wall; the origin is the opening centre at sill level; `rotationDeg` is the house model's `rotation_deg` (0 = along plan x, 90 = along plan y). Operable fixtures expose `group.userData.fixture = { kind, meshes, toggle, step, open, moving }`.
 
-Source: `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; styles in `tour/css/plan.css`. Sample files can sit in `models/` (not committed).
+Sample files can sit in `models/` (not committed).
 
 ## Performance switches
 
@@ -72,7 +79,8 @@ Source: `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; styles in `tour/
 | `tour/js/residence-model.js` | Original custom WebGL model engine. Patched: stand-in elements replace the removed panels, internals exported on `window.RESIDENCE`, wet-wall grout bed recessed behind the tiles. |
 | `tour/js/tour.js` | Walking mode source (three.js). |
 | `tour/js/tour.bundle.js` | Built bundle of `tour.js` with three.js and three-mesh-bvh. |
-| `model.html`, `tour/js/plan.js`, `tour/css/plan.css` | Plan model viewer: loads a model JSON and shows it as the tour does. |
+| `model.html`, `tour/js/plan.js`, `tour/css/plan.css` | Plan model viewer: loads a house model JSON and shows it as the tour does. |
+| `tour/js/model/`, `tour/js/fixtures/` | Reusable surface, material and fixture modules of the viewer (see Plan model viewer). |
 | `assets/` | Flooring, detail and installed-room images as plain files. |
 
 ## Publish

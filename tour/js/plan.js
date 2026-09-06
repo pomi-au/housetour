@@ -1,9 +1,10 @@
 /*
  * Plan model viewer (model.html).
  *
- * Loads a house model JSON (schema pomi.house_model.v1: slab, footing, wall and roof elements as meshes, door
- * and window fixtures, eave height lines) and shows it the way tour.html shows the residence. Walls are cut
- * around the fixtures here, windows get glazing and eave lines get fascia boards. The view is
+ * Loads a house model JSON (schema pomi.house_model.v1) and shows it the way tour.html shows the residence.
+ * The surfaces come from model/surfaces.js (slab, footing, wall cut around the openings, roof, fascia), the
+ * finishes from model/materials.js (the tour's surface set), and the fixtures from fixtures/*.js: the standard
+ * hinged door lifted from the residence engine, windows and sliding doors. Doors and sliders open on click. The view is
  * Coordinates: JSON x, y are plan metres, z is up. Here x -> x, z -> y, y -> -z, centred on the model footprint.
  * Build: cd tour/build && npm run build   ->  tour/js/plan.bundle.js
  */
@@ -13,6 +14,11 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+import { createMaterials } from './model/materials.js';
+import { buildSlab, buildFooting, buildWall, buildRoof, buildFascia, buildGlazing, openingBoxes, floorTriangles } from './model/surfaces.js';
+import { extractStandardDoor, createHingedDoor, openingFor as doorOpeningFor } from './fixtures/hinged-door.js';
+import { createWindow } from './fixtures/window.js';
+import { createSlidingDoor } from './fixtures/sliding-door.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -35,7 +41,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const tune = { ...TUNE_DEFAULTS };
   try { Object.assign(tune, JSON.parse(localStorage.getItem(TUNE_KEY) || '{}')); } catch (_) { /* no storage */ }
   tune.clock = 1;
-  const glassMaterials = [];
   const BASE_FOV = 68;
   let zoomTarget = 1, zoomLevel = 1;
   const GROUND_BELOW_FLOOR = 0.15;   // lawn surface below the slab top, as the tour's ground sits below its floor datum
@@ -57,7 +62,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   body.dataset.touch = TOUCH ? 'true' : 'false';
   const OVERVIEW_HINT = TOUCH ? 'Tap the floor to walk on it · drag to orbit · pinch to zoom' : 'Click the floor to walk on it · drag to orbit · scroll to zoom · right-drag to pan';
-  const WALK_HINT = TOUCH ? 'Drag to look · pinch to zoom · buttons walk' : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · mouse look · <kbd>T</kbd> lighting · <kbd>Esc</kbd> exit';
+  const WALK_HINT = TOUCH ? 'Drag to look · pinch to zoom · tap doors · buttons walk' : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · mouse look · click doors · <kbd>T</kbd> lighting · <kbd>Esc</kbd> exit';
 
   let mode = 'overview';
   let hintTimer = 0;
@@ -102,259 +107,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   window.addEventListener('resize', applyQuality);
 
-  // ---------------------------------------------------------------- procedural textures (as tour.js)
-  const reliefTextures = {};
-  function reliefTexture(name, size, passes) {
-    if (reliefTextures[name]) return reliefTextures[name];
-    const c = document.createElement('canvas'); c.width = c.height = size;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, size, size);
-    let seed = name.length * 7919;
-    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-    for (const [count, radius, strength] of passes) {
-      for (let i = 0; i < count; i++) {
-        const v = Math.round(128 + (rnd() - 0.5) * 2 * strength);
-        ctx.fillStyle = `rgba(${v},${v},${v},0.5)`;
-        ctx.beginPath(); ctx.arc(rnd() * size, rnd() * size, radius * (0.5 + rnd()), 0, Math.PI * 2); ctx.fill();
-      }
-    }
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    reliefTextures[name] = t;
-    return t;
-  }
-  const albedoTextures = {};
-  function albedoFromRelief(relief, mean, depth) {
-    const key = `${mean}|${depth}|${relief.uuid}`;
-    if (albedoTextures[key]) return albedoTextures[key];
-    const src = relief.image, size = src.width;
-    const c = document.createElement('canvas'); c.width = c.height = size;
-    const ctx = c.getContext('2d');
-    const d = src.getContext('2d').getImageData(0, 0, size, size).data;
-    const o = ctx.createImageData(size, size);
-    for (let i = 0; i < d.length; i += 4) {
-      const v = Math.max(0, Math.min(255, Math.round(mean + (d[i] - 128) * depth)));
-      o.data[i] = o.data[i + 1] = o.data[i + 2] = v; o.data[i + 3] = 255;
-    }
-    ctx.putImageData(o, 0, 0);
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    t.repeat.copy(relief.repeat);
-    albedoTextures[key] = t;
-    return t;
-  }
-  const surfaceTextures = {};
-  function grassTexture() {
-    if (surfaceTextures.grass) return surfaceTextures.grass;
-    const size = 512, cv = document.createElement('canvas'); cv.width = cv.height = size;
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#4f6a2f'; ctx.fillRect(0, 0, size, size);
-    let seed = 4242; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-    for (let i = 0; i < 26000; i++) {
-      const g = 90 + Math.floor(rnd() * 70), r = 55 + Math.floor(rnd() * 40), b = 25 + Math.floor(rnd() * 30);
-      ctx.strokeStyle = `rgba(${r},${g},${b},0.85)`; ctx.lineWidth = 1 + rnd() * 1.5;
-      const x = rnd() * size, y = rnd() * size, h = 4 + rnd() * 9, dx = (rnd() - 0.5) * 4;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dx, y - h); ctx.stroke();
-    }
-    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
-    t.repeat.set(200, 200); t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    surfaceTextures.grass = t; return t;
-  }
-  function streetTexture() {
-    if (surfaceTextures.street) return surfaceTextures.street;
-    const w = 256, h = 256, cv = document.createElement('canvas'); cv.width = w; cv.height = h;   // one tile = 6 m x 5.5 m
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#3b3b3d'; ctx.fillRect(0, 0, w, h);
-    let seed = 99; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-    for (let i = 0; i < 9000; i++) { const v = 45 + Math.floor(rnd() * 40); ctx.fillStyle = `rgba(${v},${v},${v + 3},0.6)`; ctx.fillRect(rnd() * w, rnd() * h, 2, 2); }
-    ctx.fillStyle = '#d9d2b0'; ctx.fillRect(w * 0.1, h / 2 - 3, w * 0.5, 6);
-    ctx.fillStyle = '#cfcfcf'; ctx.fillRect(0, 2, w, 3); ctx.fillRect(0, h - 5, w, 3);
-    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
-    t.repeat.set(320 / 6, 1); t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    surfaceTextures.street = t; return t;
-  }
-  function lightPoolTexture() {
-    if (surfaceTextures.pool) return surfaceTextures.pool;
-    const size = 128, cv = document.createElement('canvas'); cv.width = cv.height = size;
-    const ctx = cv.getContext('2d');
-    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.5, 'rgba(255,255,255,0.35)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
-    const t = new THREE.CanvasTexture(cv); surfaceTextures.pool = t; return t;
-  }
-
-  // ---------------------------------------------------------------- materials (the tour's surface set, keyed by material family)
-  const PHYSICAL_ONLY = ['clearcoat', 'clearcoatRoughness', 'sheen', 'sheenRoughness', 'specularIntensity', 'transmission', 'thickness', 'ior', 'reflectivity'];
-  function surfaceMaterial(params) {
-    const p = { ...params }; for (const k of PHYSICAL_ONLY) delete p[k];
-    return new THREE.MeshStandardMaterial(p);
-  }
-  const materialCache = new Map();
-  function materialFor(key, spec, finish) {
-    const cacheKey = key + '|' + (finish || '') + '|' + JSON.stringify(spec || null);
-    if (materialCache.has(cacheKey)) return materialCache.get(cacheKey);
-    const family = `${finish || ''} ${spec?.library_material_family || ''} ${spec?.library_material_id || ''} ${key}`.toLowerCase();
-    const rough = Number.isFinite(spec?.roughness) ? spec.roughness : null;
-    const metal = Number.isFinite(spec?.metalness) ? spec.metalness : null;
-    const common = { side: THREE.DoubleSide };   // JSON winding is not guaranteed; both faces light correctly
-    let m;
-    if (/roof_sheet|colorbond|roofing/.test(family)) {
-      m = surfaceMaterial({ ...common, color: 0x5f6468, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.6 });
-    } else if (/fascia|gutter/.test(family)) {
-      m = surfaceMaterial({ ...common, color: 0xf2f0ea, roughness: 0.5, metalness: 0, envMapIntensity: 0.35 });
-    } else if (/glass|glazing/.test(family)) {
-      m = new THREE.MeshPhysicalMaterial({ ...common, color: 0xffffff, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.14, depthWrite: false, envMapIntensity: 1.6, specularIntensity: 1.0 });
-      m.userData.baseEnv = 1.0; m.envMapIntensity = tune.glass; glassMaterials.push(m);
-    } else if (/metal|steel|alumin|colorbond|zinc/.test(family)) {
-      m = surfaceMaterial({ ...common, color: 0xb9bcbf, roughness: rough ?? 0.28, metalness: metal ?? 0.92, envMapIntensity: 1.2 });
-    } else if (/timber|wood|pine|hardwood|joist|stud/.test(family)) {
-      m = surfaceMaterial({ ...common, color: 0xb48a58, roughness: rough ?? 0.55, metalness: 0, envMapIntensity: 0.35 });
-    } else if (/carpet/.test(family)) {
-      const bumpMap = reliefTexture('carpet', 512, [[20000, 1.5, 120], [6000, 3, 100], [2500, 6, 90], [600, 12, 70]]);
-      bumpMap.repeat.set(3, 3);
-      m = surfaceMaterial({ ...common, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(bumpMap, 240, 0.9), bumpMap, bumpScale: 0.08 });
-    } else if (/tile|ceramic|porcelain/.test(family)) {
-      m = surfaceMaterial({ ...common, color: 0xdedbd4, roughness: rough ?? 0.18, metalness: 0, envMapIntensity: 0.6 });
-    } else if (/^render\b/.test(family)) {
-      // Rendered masonry: the tour's rendered-wall relief in a warm off-white.
-      const bumpMap = reliefTexture('render', 512, [[9000, 3, 120], [3000, 6, 90], [800, 14, 60]]);
-      m = surfaceMaterial({ ...common, color: 0xe9e4da, roughness: 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.10 });
-    } else if (/brick|masonry|block/.test(family)) {
-      const bumpMap = reliefTexture('render', 512, [[9000, 3, 120], [3000, 6, 90], [800, 14, 60]]);
-      m = surfaceMaterial({ ...common, color: 0xa86a5a, roughness: rough ?? 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.10 });
-    } else if (/concrete|slab|footing|cement|screed|render/.test(family)) {
-      // Concrete: the tour's rendered-wall relief over a grey base, roughness from the file.
-      const bumpMap = reliefTexture('render', 512, [[9000, 3, 120], [3000, 6, 90], [800, 14, 60]]);
-      m = surfaceMaterial({ ...common, color: 0x9e9c97, roughness: rough ?? 0.9, metalness: metal ?? 0, envMapIntensity: 0.3, map: albedoFromRelief(bumpMap, 250, 0.4), bumpMap, bumpScale: 0.10 });
-    } else {
-      // Anything else: the tour's painted wall finish.
-      const bumpMap = reliefTexture('paint', 512, [[4000, 10, 70], [12000, 4, 60], [30000, 1.5, 50]]);
-      bumpMap.repeat.set(1.5, 1.5);
-      m = surfaceMaterial({ ...common, color: new THREE.Color(1.06, 1.06, 1.06), roughness: rough ?? 0.86, metalness: metal ?? 0, envMapIntensity: 0.4, map: albedoFromRelief(bumpMap, 251, 0.12), bumpMap, bumpScale: 0.045 });
-    }
-    if (spec && spec.opaque === false && !m.transparent) { m.transparent = true; m.opacity = 0.5; m.depthWrite = false; }
-    materialCache.set(cacheKey, m);
-    return m;
-  }
-
-  // ---------------------------------------------------------------- house model JSON -> solids
-  // Schema pomi.house_model.v1: elements (slab, footing, wall, roof) as vertex/face meshes in plan metres with z
-  // up from the slab top, fixtures (doors and windows: centre, rotation, width, sill, head, depth) and guides
-  // (eave height lines). Walls arrive uncut: every wall a fixture crosses is rebuilt here as pieces around the
-  // opening, windows and sliding doors get glazing, and every eave line gets a fascia board.
-  const ROOF_SHEET = 0.05, FASCIA_DEPTH = 0.18, FASCIA_THICK = 0.03;
-  // A closed prism over a plan polygon (no holes) between two height functions, as a plan-frame mesh.
-  function prismSolid(id, list, material, contour, zTop, zBot, extra = {}) {
-    const pts = contour.map(([x, y]) => new THREE.Vector2(x, y));
-    if (THREE.ShapeUtils.isClockWise(pts)) pts.reverse();
-    const tris = THREE.ShapeUtils.triangulateShape(pts, []);
-    const n = pts.length, vertices = [], faces = [];
-    for (const p of pts) vertices.push([p.x, p.y, zTop(p.x, p.y)]);
-    for (const p of pts) vertices.push([p.x, p.y, zBot(p.x, p.y)]);
-    for (const [a, b, c] of tris) { faces.push([a, b, c]); faces.push([n + a, n + c, n + b]); }
-    for (let i = 0; i < n; i++) { const j = (i + 1) % n; faces.push([i, n + i, n + j]); faces.push([i, n + j, j]); }
-    return { id, list, material, vertices, faces, ...extra };
-  }
-  // Opening boxes from the fixtures: plan rectangle (width along the wall, depth across it) and sill..head.
-  function fixtureBoxes(json) {
-    const out = [];
-    for (const f of json.fixtures || []) {
-      const [px, py] = f.position || [];
-      if (!Number.isFinite(px) || !Number.isFinite(py) || !(f.width_m > 0)) continue;
-      const alongX = Math.abs(((Number(f.rotation_deg) || 0) % 180)) < 45;
-      const w = f.width_m / 2, d = (f.depth_m > 0 ? f.depth_m : 0.3) / 2 + 0.02;
-      const sill = Number.isFinite(f.sill_m) ? f.sill_m : 0;
-      const head = Number.isFinite(f.head_m) ? f.head_m : sill + (f.height_m > 0 ? f.height_m : 2.1);
-      out.push({ id: f.id, kind: f.kind || '', label: f.label || '', alongX, cx: px, cy: py,
-        x0: px - (alongX ? w : d), x1: px + (alongX ? w : d), y0: py - (alongX ? d : w), y1: py + (alongX ? d : w), z0: sill, z1: head });
-    }
-    return out;
-  }
-  // A wall element crossed by openings is rebuilt from its plan rectangle and top edge as pieces around the
-  // holes: full-height pieces between openings, a piece above each head and one below each sill.
-  function cutWall(el, openings) {
-    const V = el.vertices;
-    let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity, bottom = Infinity;
-    for (const [x, y, z] of V) { px0 = Math.min(px0, x); px1 = Math.max(px1, x); py0 = Math.min(py0, y); py1 = Math.max(py1, y); bottom = Math.min(bottom, z); }
-    const eps = 0.002;
-    // Plain rectangular wall: every vertex sits on the rectangle's edges.
-    if (!V.every(([x, y]) => Math.abs(x - px0) < eps || Math.abs(x - px1) < eps || Math.abs(y - py0) < eps || Math.abs(y - py1) < eps)) return null;
-    const alongX = (px1 - px0) >= (py1 - py0);
-    const A0 = alongX ? px0 : py0, A1 = alongX ? px1 : py1, B0 = alongX ? py0 : px0, B1 = alongX ? py1 : px1;
-    const cuts = [];
-    for (const o of openings) {
-      const ox0 = Math.max(px0, o.x0), ox1 = Math.min(px1, o.x1), oy0 = Math.max(py0, o.y0), oy1 = Math.min(py1, o.y1);
-      if (ox1 - ox0 < 0.005 || oy1 - oy0 < 0.005) continue;
-      const across = alongX ? oy1 - oy0 : ox1 - ox0;
-      if (across < (B1 - B0) * 0.5) continue;                  // clips a corner only: not a hole through this wall
-      cuts.push({ a0: alongX ? ox0 : oy0, a1: alongX ? ox1 : oy1, z0: o.z0, z1: o.z1 });
-    }
-    if (!cuts.length) return null;
-    cuts.sort((p, q) => p.a0 - q.a0);
-    const merged = [];
-    for (const c of cuts) {
-      const last = merged[merged.length - 1];
-      if (last && c.a0 < last.a1 - 0.001) { last.a1 = Math.max(last.a1, c.a1); last.z0 = Math.min(last.z0, c.z0); last.z1 = Math.max(last.z1, c.z1); }
-      else merged.push({ ...c });
-    }
-    // Top of the wall along its axis, from the element's upper vertices (the eave, plate or raking line).
-    const pts = V.filter(v => v[2] > bottom + 0.01).map(v => [alongX ? v[0] : v[1], v[2]]).sort((p, q) => p[0] - q[0]);
-    if (!pts.length) return null;
-    const zTop = (x, y) => {
-      const t = alongX ? x : y;
-      if (t <= pts[0][0]) return pts[0][1];
-      for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) { const [t0, z0] = pts[i - 1], [t1, z1] = pts[i]; return t1 - t0 < 1e-6 ? Math.max(z0, z1) : z0 + (z1 - z0) * (t - t0) / (t1 - t0); }
-      return pts[pts.length - 1][1];
-    };
-    const topMin = Math.min(...pts.map(p => p[1]));
-    const rect = (a0, a1) => alongX ? [[a0, B0], [a1, B0], [a1, B1], [a0, B1]] : [[B0, a0], [B1, a0], [B1, a1], [B0, a1]];
-    const pieces = [];
-    let n = 0;
-    const extra = { category: el.category, role: el.role, finish: el.finish };
-    const piece = (a0, a1, zLo, zHi) => { if (a1 - a0 > 0.002) pieces.push(prismSolid(`${el.id}-${++n}`, 'wall.cut', el.material, rect(a0, a1), zHi || zTop, () => zLo, extra)); };
-    let cursor = A0;
-    for (const c of merged) {
-      if (c.a0 > cursor + 0.001) piece(cursor, c.a0, bottom);
-      if (c.z1 < topMin - 0.005) piece(c.a0, c.a1, c.z1);
-      if (c.z0 > bottom + 0.005) piece(c.a0, c.a1, bottom, () => c.z0);
-      cursor = Math.max(cursor, c.a1);
-    }
-    if (cursor < A1 - 0.001) piece(cursor, A1, bottom);
-    return pieces;
-  }
-  function houseSolids(json) {
-    if (!Array.isArray(json.elements)) throw new Error('not a house model: no elements list (expected schema pomi.house_model.v1)');
-    const openings = fixtureBoxes(json);
-    const out = [];
-    for (const el of json.elements) {
-      if (!Array.isArray(el.vertices) || !Array.isArray(el.faces)) continue;
-      const cut = el.category === 'wall' && openings.length ? cutWall(el, openings) : null;
-      if (cut) { out.push(...cut); continue; }
-      out.push({ id: el.id, list: el.category || 'element', material: el.material || 'default', vertices: el.vertices, faces: el.faces, category: el.category, role: el.role, finish: el.finish });
-    }
-    // Glazing: one pane at the centre of every window and sliding door.
-    for (const o of openings) {
-      if (!/window|sliding|glass/.test(o.kind)) continue;
-      const t = 0.003;
-      const contour = o.alongX ? [[o.x0, o.cy - t], [o.x1, o.cy - t], [o.x1, o.cy + t], [o.x0, o.cy + t]] : [[o.cx - t, o.y0], [o.cx + t, o.y0], [o.cx + t, o.y1], [o.cx - t, o.y1]];
-      out.push(prismSolid(`${o.id}-glass`, 'glazing', 'window_glass', contour, () => o.z1, () => o.z0));
-    }
-    // Fascia boards along the eave height lines.
-    for (const e of json.guides?.eave_height_lines || []) {
-      const a = e.start, b = e.end;
-      if (!Array.isArray(a) || !Array.isArray(b)) continue;
-      const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
-      if (len < 1e-4) continue;
-      const nx = -dy / len * FASCIA_THICK / 2, ny = dx / len * FASCIA_THICK / 2;
-      const contour = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
-      const zAt = (x, y) => a[2] + (b[2] - a[2]) * ((x - a[0]) * dx + (y - a[1]) * dy) / (len * len);
-      out.push(prismSolid(e.id || 'eave', 'fascia', 'fascia', contour, (x, y) => zAt(x, y) + 0.02, (x, y) => zAt(x, y) - FASCIA_DEPTH));
-    }
-    return { solids: out, openings };
-  }
+  // ---------------------------------------------------------------- materials (model/materials.js)
+  const mats = createMaterials({ renderer, glassStrength: tune.glass });
+  const { surfaceMaterial } = mats;
+  // The standard hinged door, read from the residence engine that model.html loads hidden.
+  const doorModel = extractStandardDoor(window.RESIDENCE);
+  if (doorModel) console.info(`[plan] standard door from the residence engine: frame ${doorModel.u0.toFixed(3)}..${doorModel.u1.toFixed(3)} m, ${doorModel.top.toFixed(3)} m high`);
+  else console.warn('[plan] residence engine not loaded: hinged doors stay open holes');
 
   // ---------------------------------------------------------------- static world: sky, sun, lawn, streets
   const world = {};
@@ -381,7 +140,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     su.turbidity.value = 4; su.rayleigh.value = 1.6; su.mieCoefficient.value = 0.004; su.mieDirectionalG.value = 0.8;
     su.sunPosition.value.copy(sunDir);
     worldRoot.add(sky);
-    const grass = grassTexture();
+    const grass = mats.grassTexture();
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), surfaceMaterial({ map: grass, bumpMap: grass, bumpScale: 0.03, roughness: 1, metalness: 0, color: 0xffffff }));
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -395,7 +154,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const m = new THREE.Matrix4(), c = new THREE.Color();
     const seedRnd = (i, j) => { const v = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return v - Math.floor(v); };
     const pitch = Math.max(24, Math.ceil(Math.max(lot.x1 - lot.x0, lot.z1 - lot.z0) + 8));
-    const asphalt = new THREE.MeshLambertMaterial({ map: streetTexture(), color: 0xffffff });
+    const asphalt = new THREE.MeshLambertMaterial({ map: mats.streetTexture(), color: 0xffffff });
     const streetLen = 320, streetW = 5.5;
     const streetGeo = new THREE.PlaneGeometry(streetLen, streetW); streetGeo.rotateX(-Math.PI / 2);
     const streets = [];
@@ -415,7 +174,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const headGeo = new THREE.BoxGeometry(0.55, 0.16, 0.32); headGeo.translate(0, 4.9, -1.35);
     const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshBasicMaterial({ color: 0x555555, toneMapped: false }), lampPos.length);
     const poolGeo = new THREE.PlaneGeometry(11, 11); poolGeo.rotateX(-Math.PI / 2); poolGeo.translate(0, 0.04, -2.0);
-    const pools = new THREE.InstancedMesh(poolGeo, new THREE.MeshBasicMaterial({ map: lightPoolTexture(), color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }), lampPos.length);
+    const pools = new THREE.InstancedMesh(poolGeo, new THREE.MeshBasicMaterial({ map: mats.lightPoolTexture(), color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }), lampPos.length);
     lampPos.forEach((p, k) => { m.identity(); m.setPosition(p.x, groundY, p.z); lamps.setMatrixAt(k, m); heads.setMatrixAt(k, m); pools.setMatrixAt(k, m); });
     for (const o of [lamps, heads, pools]) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; o.raycast = () => {}; root.add(o); }
     const lampLights = [];
@@ -453,52 +212,49 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function buildModel(json, name) {
-    const { solids, openings } = houseSolids(json);
-    if (!solids.length) throw new Error('No element with vertices and faces found');
+    if (!Array.isArray(json.elements)) throw new Error('not a house model: no elements list (expected schema pomi.house_model.v1)');
+    const elements = json.elements.filter(el => Array.isArray(el.vertices) && Array.isArray(el.faces));
+    if (!elements.length) throw new Error('No element with vertices and faces found');
     const materials = json.materials || {};
     disposeBuilt();
     // Footprint centre in plan, so the model sits on the origin of the lawn and streets.
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (const s of solids) for (const [x, y, z] of s.vertices) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
-    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    // Floor level: the highest slab top in the file (the walkable surface), else the top of everything.
-    const slabs = solids.filter(s => s.category === 'slab' || /slab/.test(s.list));
-    const floorTop = slabs.length ? Math.max(...slabs.flatMap(s => s.vertices.map(v => v[2]))) : z1;
+    for (const el of elements) for (const [x, y, z] of el.vertices) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    const frame = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+    const slabs = elements.filter(el => el.category === 'slab');
+    const floorTop = slabs.length ? Math.max(...slabs.flatMap(el => el.vertices.map(v => v[2]))) : z1;
     const groundY = floorTop - GROUND_BELOW_FLOOR;
+    const openings = openingBoxes(json.fixtures, { doorOpening: doorModel ? w => doorOpeningFor(doorModel, w) : null });
     const root = new THREE.Group();
-    const meshes = [], floorTris = [];
-    let triangles = 0;
-    for (const s of solids) {
-      const V = s.vertices, T = s.faces;
-      const pos = [], uv = [];
-      const w = ([x, y, z]) => [x - cx, z, -(y - cy)];   // plan (x, y) with z up -> three.js (x, y up, z)
-      for (const tri of T) {
-        if (!Array.isArray(tri) || tri.length < 3) continue;
-        const a = w(V[tri[0]]), b = w(V[tri[1]]), c = w(V[tri[2]]);
-        const n = new THREE.Vector3().crossVectors(new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]), new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]));
-        if (n.lengthSq() < 1e-14) continue;
-        n.normalize();
-        for (const p of [a, b, c]) {
-          pos.push(p[0], p[1], p[2]);
-          // World-metre UVs along the face plane, so the relief maps tile without seams (as the tour).
-          const nx = Math.abs(n.x), ny = Math.abs(n.y), nz = Math.abs(n.z);
-          if (ny >= nx && ny >= nz) uv.push(p[0], p[2]); else if (nx >= nz) uv.push(p[2], p[1]); else uv.push(p[0], p[1]);
-        }
-        // Upward faces at the floor level carry the planar reflection.
-        if (Math.abs(n.y) > 0.9 && Math.abs(a[1] - floorTop) < 0.01 && Math.abs(b[1] - floorTop) < 0.01 && Math.abs(c[1] - floorTop) < 0.01) floorTris.push(a[0], a[2], b[0], b[2], c[0], c[2]);
-        triangles++;
+    const meshes = [], fixtures = [], fixtureMeshes = [], floorTris = [];
+    const matFor = el => mats.materialFor(el.material || 'default', materials[el.material], el.finish);
+    const place = (m, list) => { if (!m) return; root.add(m); list.push(m); };
+    // Surfaces (model/surfaces.js).
+    for (const el of elements) {
+      switch (el.category) {
+        case 'slab': { const m = buildSlab(el, matFor(el), frame); place(m, meshes); if (m) floorTris.push(...floorTriangles(m, floorTop)); break; }
+        case 'footing': place(buildFooting(el, matFor(el), frame), meshes); break;
+        case 'wall': for (const m of buildWall(el, openings, matFor(el), frame)) place(m, meshes); break;
+        case 'roof': place(buildRoof(el, mats.materialFor('roof_sheet', materials.roof_sheet, null), frame), meshes); break;
+        default: place(buildRoof(el, matFor(el), frame), meshes);
       }
-      if (!pos.length) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-      geo.computeVertexNormals();   // non-indexed: flat face normals
-      geo.computeBoundsTree();
-      const mesh = new THREE.Mesh(geo, materialFor(s.material, materials[s.material], s.finish));
-      mesh.castShadow = true; mesh.receiveShadow = true;
-      mesh.userData = { id: s.id, list: s.list, material: s.material, category: s.category, floor: s.category === 'slab' };
-      root.add(mesh); meshes.push(mesh);
     }
+    for (const line of json.guides?.eave_height_lines || []) place(buildFascia(line, mats.finishes.fascia(), frame), meshes);
+    // Fixtures (fixtures/*.js): each opening gets its module by kind, placed at the opening centre at sill level.
+    for (const o of openings) {
+      const position = [o.cx - frame.cx, floorTop + o.z0, -(o.cy - frame.cy)];
+      const height = o.z1 - o.z0;
+      let g = null;
+      if (o.hinged) g = createHingedDoor({ model: doorModel, width: o.width, hinge: o.hinge, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+      else if (/sliding/.test(o.kind)) g = createSlidingDoor({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+      else if (/window|glass/.test(o.kind)) g = createWindow({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+      if (!g) { if (/window|sliding|glass/.test(o.kind)) place(buildGlazing(o, mats.fixtures.glass, frame), meshes); continue; }
+      g.userData.fixture.id = o.id;
+      root.add(g); fixtures.push(g);
+      fixtureMeshes.push(...g.userData.fixture.meshes);
+    }
+    let triangles = 0;
+    for (const m of [...meshes, ...fixtureMeshes]) triangles += m.geometry.attributes.position.count / 3;
 
     // Planar floor mirror, the tour's shader, on the slab top.
     const mpos = [];
@@ -566,13 +322,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     worldRoot.add(streetRoot);
 
     scene.add(root);
+    root.updateMatrixWorld(true);
     const box = new THREE.Box3(new THREE.Vector3(-hx, z0, -hz), new THREE.Vector3(hx, z1, hz));
-    built = { root, meshes, reflector, floorTop, groundY, box, triangles, name, solids: solids.length };
+    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length };
     lastSunUpdate = -1;
     applyQuality();
-    modelName.textContent = `${json.job || name} · ${solids.length} solids · ${triangles} triangles · ${openings.length} openings`;
+    const doors = fixtures.filter(g => g.userData.fixture.kind === 'hinged door').length;
+    modelName.textContent = `${json.job || name} · ${meshes.length} surfaces · ${openings.length} openings · ${doors} doors · ${Math.round(triangles / 1000)}k triangles`;
     document.title = `${json.job || name} · House model`;
-    console.info(`[plan] model: ${solids.length} solids, ${triangles} triangles, floor at ${floorTop.toFixed(3)} m`);
+    console.info(`[plan] model: ${meshes.length} surfaces, ${fixtures.length} fixtures, ${Math.round(triangles)} triangles, floor at ${floorTop.toFixed(3)} m`);
     return built;
   }
 
@@ -627,7 +385,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const raycaster = new THREE.Raycaster();
   raycaster.firstHitOnly = true;
   const tmpOrigin = new THREE.Vector3(), tmpDir = new THREE.Vector3();
-  function colliders() { return built ? [...built.meshes, world.ground] : [world.ground]; }
+  function colliders() { return built ? [...built.meshes, ...built.fixtureMeshes, world.ground] : [world.ground]; }
   function probe(ox, oy, oz, dx, dy, dz, far) {
     tmpOrigin.set(ox, oy, oz); tmpDir.set(dx, dy, dz).normalize();
     raycaster.set(tmpOrigin, tmpDir); raycaster.near = 0; raycaster.far = far;
@@ -751,6 +509,96 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.environmentIntensity = 0.55;
   }
 
+  // ---------------------------------------------------------------- fixtures: target, use, outline (as tour.js)
+  let focusFixture = null;
+  function centreTarget(ndcX = 0, ndcY = 0) {
+    if (!built || !built.fixtures.length) return null;
+    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+    raycaster.near = 0; raycaster.far = 2.8;
+    raycaster.firstHitOnly = false;
+    const hits = raycaster.intersectObjects([...built.meshes, ...built.fixtures], true);
+    raycaster.firstHitOnly = true;
+    if (!hits.length) return null;
+    hits.sort((a, b) => a.distance - b.distance);
+    const nearest = hits[0].distance;
+    for (const h of hits) {
+      if (h.distance > nearest + 0.03) break;   // only what is at the front surface
+      let o = h.object;
+      while (o && !o.userData.fixture) o = o.parent;
+      if (o?.userData.fixture?.toggle) return o;
+    }
+    return null;
+  }
+  function activateFixture(group) {
+    const f = group?.userData.fixture;
+    if (!f?.toggle) return;
+    // A door swings away from the walker: the walker's side of the wall in fixture-local z decides.
+    const local = group.worldToLocal(new THREE.Vector3(player.x, player.footY + 1, player.z));
+    f.toggle(local.z > 0 ? 1 : -1);
+    window.ResidenceSound?.play(f.kind === 'hinged door' ? 'door-handle' : 'slider-move');
+  }
+  function stepFixtures(dt) {
+    let moving = false;
+    for (const g of built?.fixtures || []) if (g.userData.fixture.step?.(dt)) moving = true;
+    return moving;
+  }
+  // Lime silhouette on the fixture under the crosshair (the tour's mask pass): the whole assembly in white into
+  // a half-size mask, depth-tested against the scene, then a rim where the mask ends.
+  let outlineMeshes = [], outlineOwner = null, outlineTarget = null;
+  const OUTLINE_LAYER = 7;
+  const outlineDepthOnly = new THREE.MeshBasicMaterial({ colorWrite: false });
+  const outlineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, toneMapped: false });
+  const outlineQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+    uniforms: { tMask: { value: null }, texel: { value: new THREE.Vector2(1 / 512, 1 / 512) }, color: { value: new THREE.Color(0x9dff1f) } },
+    transparent: true, depthTest: false, depthWrite: false,
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D tMask; uniform vec2 texel; uniform vec3 color; varying vec2 vUv;
+      void main() {
+        float c = texture2D(tMask, vUv).r;
+        if (c > 0.5) discard;
+        float m = 0.0;
+        for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) m = max(m, texture2D(tMask, vUv + vec2(float(i), float(j)) * texel).r);
+        if (m < 0.5) discard;
+        gl_FragColor = vec4(color, 0.95);
+      }`
+  }));
+  outlineQuad.frustumCulled = false;
+  const outlineScene = new THREE.Scene(); outlineScene.add(outlineQuad);
+  const outlineCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  function updateOutline(owner) {
+    if (owner === outlineOwner) return;
+    outlineOwner = owner;
+    outlineMeshes = owner ? owner.userData.fixture.meshes.slice() : [];
+  }
+  function drawOutline() {
+    if (!outlineMeshes.length) return;
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const w = Math.max(2, Math.round(size.x / 2)), h = Math.max(2, Math.round(size.y / 2));
+    if (!outlineTarget) outlineTarget = new THREE.WebGLRenderTarget(w, h, { depthBuffer: true, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    else if (outlineTarget.width !== w || outlineTarget.height !== h) outlineTarget.setSize(w, h);
+    const prevTarget = renderer.getRenderTarget(), prevAuto = renderer.autoClear, prevTone = renderer.toneMapping;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.setRenderTarget(outlineTarget);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+    scene.overrideMaterial = outlineDepthOnly;
+    renderer.render(scene, camera);
+    for (const m of outlineMeshes) m.layers.enable(OUTLINE_LAYER);
+    const savedMask = camera.layers.mask; camera.layers.set(OUTLINE_LAYER);
+    scene.overrideMaterial = outlineWhite;
+    renderer.autoClear = false;
+    renderer.render(scene, camera);
+    camera.layers.mask = savedMask;
+    for (const m of outlineMeshes) m.layers.disable(OUTLINE_LAYER);
+    scene.overrideMaterial = null;
+    renderer.setRenderTarget(prevTarget);
+    renderer.toneMapping = prevTone;
+    outlineQuad.material.uniforms.tMask.value = outlineTarget.texture;
+    outlineQuad.material.uniforms.texel.value.set(1 / w, 1 / h);
+    renderer.render(outlineScene, outlineCamera);
+    renderer.autoClear = prevAuto;
+  }
+
   // ---------------------------------------------------------------- frame loop
   let lastTime = 0, frames = 0, fpsTime = 0, fps = 0;
   let lastPoseKey = '', sceneDirty = 3;
@@ -760,6 +608,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (mode === 'walk') stepPlayer(dt);
     else { if (flying) flying(time); applyOrbit(); }
     updateEnvironment(dt);
+    if (stepFixtures(dt)) { renderer.shadowMap.needsUpdate = true; world.sun.shadow.needsUpdate = true; sceneDirty = 3; }
     const poseKey = `${camera.position.x.toFixed(3)}|${camera.position.y.toFixed(3)}|${camera.position.z.toFixed(3)}|${camera.rotation.x.toFixed(4)}|${camera.rotation.y.toFixed(4)}|${zoomLevel.toFixed(3)}`;
     if (poseKey !== lastPoseKey || tune.clock) sceneDirty = 3;
     lastPoseKey = poseKey;
@@ -800,7 +649,10 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         r.userData.fresh = true;
       }
     }
+    if (mode === 'walk') { focusFixture = centreTarget(); crosshair.dataset.target = focusFixture ? 'true' : 'false'; updateOutline(focusFixture); }
+    else if (focusFixture) { focusFixture = null; updateOutline(null); }
     renderer.render(scene, camera);
+    drawOutline();
     frames++; fpsTime += dt;
     if (fpsTime >= 0.5) {
       fps = Math.round(frames / fpsTime); frames = 0; fpsTime = 0;
@@ -867,6 +719,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     setTuning(false);
     if (document.pointerLockElement === tourCanvas) document.exitPointerLock();
     keys.clear();
+    focusFixture = null; updateOutline(null); crosshair.dataset.target = 'false';
     body.dataset.tourMode = 'overview';
     const eyePose = { yaw: player.yaw, pitch: -player.pitch, distance: 0.12, target: new THREE.Vector3(player.x, player.footY + EYE_HEIGHT, player.z) };
     const back = overviewPoseBefore || { yaw: player.yaw, pitch: 0.66, distance: 30, target: new THREE.Vector3(player.x, player.footY, player.z) };
@@ -888,7 +741,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     tunePanel.querySelector('input[name="clock"]').checked = !!tune.clock;
   }
   function applyTune() {
-    for (const m of glassMaterials) m.envMapIntensity = m.userData.baseEnv * tune.glass;
+    mats.setGlass(tune.glass);
     try { localStorage.setItem(TUNE_KEY, JSON.stringify(tune)); } catch (_) { /* no storage */ }
   }
   tunePanel.addEventListener('input', e => {
@@ -917,6 +770,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.code === 'KeyT') { setTuning(!tuningOpen); return; }
     if (mode !== 'walk') return;
     if (e.code === 'Escape') { if (tuningOpen) { setTuning(false); return; } exitWalk(); return; }
+    if (e.code === 'KeyE' || e.code === 'Space') { activateFixture(focusFixture); e.preventDefault(); return; }
     keys.add(e.code);
     if (/^(Arrow|Key[WASD]|Shift)/.test(e.code)) e.preventDefault();
   });
@@ -937,13 +791,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - dy * 0.0021));
   }
   const pointers = new Map();
-  let press = null, pinch = null;
+  let press = null, pinch = null, tap = null;
   tourCanvas.addEventListener('contextmenu', e => e.preventDefault());
   tourCanvas.addEventListener('pointerdown', e => {
     if (e.pointerType === 'touch') { pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: zoomTarget, distance: orbit.distance }; press = null; } }
     if (mode === 'walk') {
       if (e.pointerType !== 'touch' && document.pointerLockElement !== tourCanvas) { dragging = true; lastX = e.clientX; lastY = e.clientY; tourCanvas.requestPointerLock?.(); }
-      if (e.pointerType === 'touch') { dragging = true; lastX = e.clientX; lastY = e.clientY; }
+      if (e.pointerType === 'touch') { dragging = true; lastX = e.clientX; lastY = e.clientY; tap = { x: e.clientX, y: e.clientY, t: performance.now() }; }
+      else if (e.button === 0) activateFixture(focusFixture);
       return;
     }
     if (pointers.size > 1) return;
@@ -981,6 +836,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const endPointer = e => {
     if (e.pointerType === 'touch') { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; }
     dragging = pointers.size > 0;
+    if (mode === 'walk' && tap && e.pointerType === 'touch' && pointers.size === 0) {
+      // A still tap uses the door under the finger, else the one under the centre mark.
+      if (performance.now() - tap.t < 400 && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 12) {
+        const ndcX = (e.clientX / window.innerWidth) * 2 - 1, ndcY = -(e.clientY / window.innerHeight) * 2 + 1;
+        activateFixture(centreTarget(ndcX, ndcY) || focusFixture);
+      }
+      tap = null;
+    }
     if (mode !== 'overview' || !press) return;
     const p = press; press = null;
     if (p.moved || p.mod || p.pan || performance.now() - p.t > 450) return;
@@ -1000,6 +863,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     button.addEventListener('pointercancel', release);
     button.addEventListener('pointerleave', release);
     button.addEventListener('contextmenu', e => e.preventDefault());
+    if (!move) button.addEventListener('click', () => activateFixture(focusFixture));
   }
 
   // ---------------------------------------------------------------- loading

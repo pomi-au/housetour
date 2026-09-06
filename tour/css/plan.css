@@ -1,4 +1,5 @@
 /* Plan model viewer: the three.js canvas draws both views, plus the JSON loader. Layered over tour.css. */
+#app[hidden] { display: none !important; }
 #tour-scene { display: block; cursor: grab; }
 #tour-scene:active { cursor: grabbing; }
 body[data-tour-mode="walk"] #tour-scene { cursor: none; }

@@ -6,10 +6,16 @@
   <meta name="theme-color" content="#1c1e1d">
   <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
   <title>Plan Model Viewer</title>
-  <link rel="stylesheet" href="tour/css/tour.css?v=mtpzpxwa">
-  <link rel="stylesheet" href="tour/css/plan.css?v=mtpzpxwa">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtq09dtu">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtq09dtu">
 </head>
 <body data-tour-mode="overview">
+  <!-- The residence engine runs hidden and paused: the viewer lifts its standard hinged door from it. -->
+  <main id="app" data-ui-mode="client" aria-hidden="true" hidden>
+    <div id="viewport"><canvas id="scene" width="4" height="4"></canvas><div id="labels"></div></div>
+    <div id="fatal"></div>
+  </main>
+
   <!-- One three.js renderer draws both the bird's-eye overview and the walking view. -->
   <canvas id="tour-scene" aria-label="Building model. Drag to orbit, scroll to zoom, right-drag to pan. Click the floor to walk on it."></canvas>
   <div id="tour-hud">
@@ -23,6 +29,7 @@
     <button id="tour-exit" type="button">Exit tour · Esc</button>
     <div id="tour-mobile" aria-label="Touch controls">
       <button type="button" data-move="back" aria-label="Walk backward">&#9660;</button>
+      <button type="button" data-use aria-label="Use door">Use</button>
       <button type="button" data-move="forward" aria-label="Walk forward">&#9650;</button>
     </div>
     <form id="tour-tune" hidden>
@@ -50,6 +57,9 @@
     <button type="button" data-close>Close</button>
   </section>
 
-  <script src="tour/js/plan.bundle.js?v=mtpzpxwa"></script>
+  <script>window.__RESIDENCE_PAUSED__ = true;   /* the engine only supplies geometry here; it never draws */</script>
+  <script src="tour/js/residence-sound.js?v=mtq09dtu"></script>
+  <script src="tour/js/residence-model.js?v=mtq09dtu"></script>
+  <script src="tour/js/plan.bundle.js?v=mtq09dtu"></script>
 </body>
 </html>
