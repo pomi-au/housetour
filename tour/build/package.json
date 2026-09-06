@@ -1,10 +1,11 @@
 {
   "name": "residence-tour-build",
   "private": true,
-  "description": "Bundles tour/js/tour.js (three.js walking mode) into tour/js/tour.bundle.js so the page works from file://.",
+  "description": "Bundles tour/js/tour.js and tour/js/plan.js (three.js) into tour/js/*.bundle.js so the pages work from file://.",
   "scripts": {
-    "build": "NODE_PATH=./node_modules esbuild ../js/tour.js --bundle --format=iife --target=es2020 --outfile=../js/tour.bundle.js --legal-comments=none && node stamp.mjs",
-    "watch": "NODE_PATH=./node_modules esbuild ../js/tour.js --bundle --format=iife --target=es2020 --outfile=../js/tour.bundle.js --watch"
+    "build": "NODE_PATH=./node_modules esbuild ../js/tour.js --bundle --format=iife --target=es2020 --outfile=../js/tour.bundle.js --legal-comments=none && NODE_PATH=./node_modules esbuild ../js/plan.js --bundle --format=iife --target=es2020 --outfile=../js/plan.bundle.js --legal-comments=none && node stamp.mjs",
+    "watch": "NODE_PATH=./node_modules esbuild ../js/tour.js --bundle --format=iife --target=es2020 --outfile=../js/tour.bundle.js --watch",
+    "watch:plan": "NODE_PATH=./node_modules esbuild ../js/plan.js --bundle --format=iife --target=es2020 --outfile=../js/plan.bundle.js --watch"
   },
   "dependencies": {
     "three": "0.170.0",

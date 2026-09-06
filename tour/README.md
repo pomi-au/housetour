@@ -30,6 +30,14 @@ Around the house an 11 x 11 grid of low-detail house clones fills the neighbourh
 
 The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and slides along walls.
 
+## Plan model viewer
+
+`model.html` shows a building model JSON instead of the coded residence. It loads any file of schema `foma.005_01.slab-footing-model.v1`, or any JSON whose entries carry `mesh.vertices_m`, `mesh.triangle_indices` and a `material_key`. Choose the file in the panel, drop it on the page, or open `model.html?src=path/to/model.json`.
+
+The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it; the walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. Materials come from the file's material family (concrete, timber, metal, glass, tile, brick, carpet, else paint) with roughness and metalness from the file. JSON x, y are plan metres with z up; the model is centred on the lawn with the slab top as the walking floor.
+
+Source: `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; styles in `tour/css/plan.css`. Sample files can sit in `models/` (not committed).
+
 ## Performance switches
 
 `RENDER` at the top of `tour/js/tour.js` holds the quality switches; `ResidenceTour.setQuality({...})` changes the ones that apply at run time and `ResidenceTour.benchmark(60, true)` returns milliseconds per frame.
@@ -58,6 +66,7 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 | `tour/js/residence-model.js` | Original custom WebGL model engine. Patched: stand-in elements replace the removed panels, internals exported on `window.RESIDENCE`, wet-wall grout bed recessed behind the tiles. |
 | `tour/js/tour.js` | Walking mode source (three.js). |
 | `tour/js/tour.bundle.js` | Built bundle of `tour.js` with three.js and three-mesh-bvh. |
+| `model.html`, `tour/js/plan.js`, `tour/css/plan.css` | Plan model viewer: loads a model JSON and shows it as the tour does. |
 | `assets/` | Flooring, detail and installed-room images as plain files. |
 
 ## Publish

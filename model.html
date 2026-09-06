@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1c1e1d">
+  <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
+  <title>Plan Model Viewer</title>
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtpyb7r0">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtpyb7r0">
+</head>
+<body data-tour-mode="overview">
+  <!-- One three.js renderer draws both the bird's-eye overview and the walking view. -->
+  <canvas id="tour-scene" aria-label="Building model. Drag to orbit, scroll to zoom, right-drag to pan. Click the floor to walk on it."></canvas>
+  <div id="tour-hud">
+    <div id="tour-title">Plan model · viewer</div>
+    <button id="plan-open" type="button" hidden>Load JSON</button>
+    <div id="plan-name"></div>
+    <div id="tour-stats"></div>
+    <div id="tour-crosshair" data-target="false"></div>
+    <div id="tour-target"></div>
+    <div id="tour-loading" data-active="false">Building the model…</div>
+    <button id="tour-exit" type="button">Exit tour · Esc</button>
+    <div id="tour-mobile" aria-label="Touch controls">
+      <button type="button" data-move="back" aria-label="Walk backward">&#9660;</button>
+      <button type="button" data-move="forward" aria-label="Walk forward">&#9650;</button>
+    </div>
+    <form id="tour-tune" hidden>
+      <div class="tune-head"><strong>Lighting</strong><span>T to close · click view to look again</span></div>
+      <label>Daylight base <input type="range" name="base" min="0" max="2" step="0.05"><output></output></label>
+      <label>Exposure <input type="range" name="exposure" min="0.4" max="2" step="0.02"><output></output></label>
+      <label>Window reflection <input type="range" name="glass" min="0" max="4" step="0.1"><output></output></label>
+      <label>Time of day <input type="range" name="hour" min="0" max="24" step="0.1"><output></output></label>
+      <label class="tune-check"><input type="checkbox" name="clock" checked> Clock runs · 2.5 s = 1 hour</label>
+      <button type="button" data-reset>Reset</button>
+    </form>
+    <div id="tour-hint" data-hidden="true"></div>
+  </div>
+
+  <!-- Model loader: any JSON whose entries carry mesh.vertices_m and mesh.triangle_indices. -->
+  <section id="plan-load" aria-label="Load a model">
+    <h1>Plan model viewer</h1>
+    <p>Load a slab and footing model JSON (schema <code>foma.005_01.slab-footing-model.v1</code>). The model is shown from above; click its floor to walk on it.</p>
+    <label class="plan-pick">
+      <input id="plan-file" type="file" accept=".json,application/json">
+      <span>Choose a JSON file</span>
+    </label>
+    <p class="plan-drop">or drop the file anywhere on this page · or open <code>model.html?src=path/to/model.json</code></p>
+    <p id="plan-status" data-error="false"></p>
+    <button type="button" data-close>Close</button>
+  </section>
+
+  <script src="tour/js/plan.bundle.js?v=mtpyb7r0"></script>
+</body>
+</html>

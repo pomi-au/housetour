@@ -1,0 +1,91 @@
+/* Plan model viewer: the three.js canvas draws both views, plus the JSON loader. Layered over tour.css. */
+#tour-scene { display: block; cursor: grab; }
+#tour-scene:active { cursor: grabbing; }
+body[data-tour-mode="walk"] #tour-scene { cursor: none; }
+#tour-title, #tour-stats, #plan-name { text-shadow: 0 1px 3px rgba(0, 0, 0, .8); }
+#tour-title { color: rgba(244, 242, 236, .8); }
+#tour-stats { display: block; }
+
+#plan-open {
+  position: absolute;
+  top: 40px;
+  left: 20px;
+  pointer-events: auto;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(20, 22, 21, .6);
+  color: #f4f2ec;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+#plan-open[hidden], body[data-tour-mode="walk"] #plan-open { display: none; }
+#plan-open:hover { background: rgba(20, 22, 21, .85); }
+
+#plan-name {
+  position: absolute;
+  top: 76px;
+  left: 20px;
+  font-size: 12px;
+  color: rgba(244, 242, 236, .6);
+}
+body[data-tour-mode="walk"] #plan-name { display: none; }
+
+#plan-load {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 30;
+  width: min(440px, calc(100vw - 40px));
+  padding: 22px 24px 18px;
+  border-radius: 14px;
+  background: rgba(20, 22, 21, .88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #f4f2ec;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .35);
+}
+#plan-load[hidden] { display: none; }
+#plan-load h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
+#plan-load p { margin: 0 0 12px; color: rgba(244, 242, 236, .8); }
+#plan-load code { font-size: 12px; color: #ffc866; }
+#plan-load .plan-pick {
+  display: block;
+  padding: 14px;
+  border: 1px dashed rgba(255, 255, 255, .35);
+  border-radius: 10px;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(255, 255, 255, .05);
+}
+#plan-load .plan-pick:hover, body[data-dragging="true"] #plan-load .plan-pick { border-color: #ffc866; background: rgba(255, 200, 102, .12); }
+#plan-load .plan-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+#plan-load .plan-pick span { font-weight: 600; }
+#plan-load .plan-drop { margin-top: 10px; font-size: 12px; color: rgba(244, 242, 236, .6); }
+#plan-status { min-height: 1.2em; font-size: 12px; }
+#plan-status[data-error="true"] { color: #ff8a80; }
+#plan-load button[data-close] {
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+body[data-dragging="true"]::after {
+  content: 'Drop the JSON file to load it';
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 22, 21, .5);
+  color: #f4f2ec;
+  font-size: 18px;
+  pointer-events: none;
+}
