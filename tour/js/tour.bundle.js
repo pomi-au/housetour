@@ -37347,7 +37347,7 @@ void main() {
       aoSamples: 8,
       lessOften: true,
       lights: 8,
-      haloLights: false,
+      haloLights: true,
       physical: false,
       cell: 8,
       cull: true,

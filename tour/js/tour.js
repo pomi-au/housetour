@@ -61,7 +61,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // straight to the canvas when ambient occlusion is off (no post-processing pass); reflectEvery: floor
   // reflection refresh interval in frames.
   const RENDER = { dpr: TOUCH ? 1 : 1.25, msaa: 2, reflection: 0.3, reflectEvery: 2, ao: false, sunShadow: 1024, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, aoSamples: 8, lessOften: true,
-    lights: 8, haloLights: false, physical: false, cell: 8, cull: true, direct: true };   // O toggles ambient occlusion
+    lights: 8, haloLights: true, physical: false, cell: 8, cull: true, direct: true };   // O toggles ambient occlusion
   // Every fixture on the current level gets its own light, so nothing switches on or off while you walk a floor.
   // (The other level's fixtures sit behind its slab; the room mask keeps them out anyway.)
   const SPOT_POOL = Math.min(RENDER.lights, Math.max(1, ...['upper', 'ground'].map(level => R.ceilingLEDs.filter(led => led.state.level === level).length)));
