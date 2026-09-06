@@ -13,17 +13,18 @@ import * as THREE from 'three';
 
 const PHYSICAL_ONLY = ['clearcoat', 'clearcoatRoughness', 'sheen', 'sheenRoughness', 'specularIntensity', 'transmission', 'thickness', 'ior', 'reflectivity'];
 
-export function createMaterials({ renderer, physical = false, glassStrength = 2.4 } = {}) {
+export function createMaterials({ renderer, physical = false, glassStrength = 2.4, patch = null } = {}) {
   const maxAniso = renderer ? renderer.capabilities.getMaxAnisotropy() : 1;
   const reliefTextures = {}, albedoTextures = {}, surfaceTextures = {};
   const glassMaterials = [];
   let glass = glassStrength;
 
   // Flat surfaces need none of the physical layers: the standard shader draws them the same for less work.
-  function surfaceMaterial(params) {
-    if (physical) return new THREE.MeshPhysicalMaterial(params);
-    const p = { ...params }; for (const k of PHYSICAL_ONLY) delete p[k];
-    return new THREE.MeshStandardMaterial(p);
+  // `patch(material, surface)` (the room mask of model/lighting.js) is applied to every material made here;
+  // surface 'floor' or 'wall' picks the direct-light scale the tour's sliders drive.
+  function surfaceMaterial(params, surface = 'wall') {
+    const m = physical ? new THREE.MeshPhysicalMaterial(params) : new THREE.MeshStandardMaterial((() => { const p = { ...params }; for (const k of PHYSICAL_ONLY) delete p[k]; return p; })());
+    return patch ? patch(m, surface) : m;
   }
 
   // Procedural relief maps: fine fibre grain for carpet, soft plaster for walls, coarse grain for render.
@@ -76,19 +77,20 @@ export function createMaterials({ renderer, physical = false, glassStrength = 2.
   const common = { side: THREE.DoubleSide };   // model winding is not guaranteed; both faces light correctly
   // The tour's finishes, one function each, reusable on their own.
   const finishes = {
-    concrete: (spec) => { const b = renderRelief(); return surfaceMaterial({ ...common, color: 0x9e9c97, roughness: spec?.roughness ?? 0.9, metalness: spec?.metalness ?? 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.10 }); },
+    concrete: (spec) => { const b = renderRelief(); return surfaceMaterial({ ...common, color: 0x9e9c97, roughness: spec?.roughness ?? 0.9, metalness: spec?.metalness ?? 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.10 }, 'floor'); },
+    ceiling: () => surfaceMaterial({ ...common, color: 0xe6e3dd, roughness: 1.0, metalness: 0, envMapIntensity: 0.15 }),
     brick: (spec) => { const b = renderRelief(); return surfaceMaterial({ ...common, color: 0xa86a5a, roughness: spec?.roughness ?? 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.10 }); },
     render: () => { const b = renderRelief(); return surfaceMaterial({ ...common, color: 0xe9e4da, roughness: 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.10 }); },
     paint: (spec) => { const b = paintRelief(); return surfaceMaterial({ ...common, color: new THREE.Color(1.06, 1.06, 1.06), roughness: spec?.roughness ?? 0.86, metalness: spec?.metalness ?? 0, envMapIntensity: 0.4, map: albedoFromRelief(b, 251, 0.12), bumpMap: b, bumpScale: 0.045 }); },
-    carpet: () => { const b = carpetRelief(); return surfaceMaterial({ ...common, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(b, 240, 0.9), bumpMap: b, bumpScale: 0.08 }); },
-    tile: (spec) => surfaceMaterial({ ...common, color: 0xdedbd4, roughness: spec?.roughness ?? 0.18, metalness: 0, envMapIntensity: 0.6 }),
+    carpet: () => { const b = carpetRelief(); return surfaceMaterial({ ...common, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(b, 240, 0.9), bumpMap: b, bumpScale: 0.08 }, 'floor'); },
+    tile: (spec) => surfaceMaterial({ ...common, color: 0xdedbd4, roughness: spec?.roughness ?? 0.18, metalness: 0, envMapIntensity: 0.6 }, 'floor'),
     timber: (spec) => surfaceMaterial({ ...common, color: 0xb48a58, roughness: spec?.roughness ?? 0.55, metalness: 0, envMapIntensity: 0.35 }),
     metal: (spec) => surfaceMaterial({ ...common, color: 0xb9bcbf, roughness: spec?.roughness ?? 0.28, metalness: spec?.metalness ?? 0.92, envMapIntensity: 1.2 }),
     roof: () => surfaceMaterial({ ...common, color: 0x5f6468, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.6 }),
     fascia: () => surfaceMaterial({ ...common, color: 0xf2f0ea, roughness: 0.5, metalness: 0, envMapIntensity: 0.35 }),
     glass: () => {
       const m = new THREE.MeshPhysicalMaterial({ ...common, color: 0xffffff, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.14, depthWrite: false, envMapIntensity: 1.6, specularIntensity: 1.0 });
-      m.userData.baseEnv = 1.0; m.envMapIntensity = glass; glassMaterials.push(m); return m;
+      m.userData.baseEnv = 1.0; m.envMapIntensity = glass; glassMaterials.push(m); return patch ? patch(m, 'wall') : m;
     }
   };
   // Finish by material family, library id, finish word and key.

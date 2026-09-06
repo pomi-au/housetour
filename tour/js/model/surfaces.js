@@ -170,6 +170,13 @@ export function buildFascia(line, material, frame) {
   return meshFromFaces(p.vertices, p.faces, material, frame, { id: line.id || 'eave', category: 'fascia' });
 }
 
+// A flat ceiling slab over a plan rectangle [x0, y0, x1, y1] at height z (plan frame), 120 mm thick, grown into the walls.
+export function buildCeiling(rect, z, material, frame, grow = 0.12) {
+  const [x0, y0, x1, y1] = rect;
+  const p = prism([[x0 - grow, y0 - grow], [x1 + grow, y0 - grow], [x1 + grow, y1 + grow], [x0 - grow, y1 + grow]], () => z + 0.12, () => z);
+  return meshFromFaces(p.vertices, p.faces, material, frame, { category: 'ceiling' });
+}
+
 // A plain glass pane filling an opening box (for openings with no fixture module).
 export function buildGlazing(o, material, frame) {
   const t = 0.003;

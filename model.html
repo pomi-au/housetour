@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#1c1e1d">
   <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
   <title>Plan Model Viewer</title>
-  <link rel="stylesheet" href="tour/css/tour.css?v=mtq09dtu">
-  <link rel="stylesheet" href="tour/css/plan.css?v=mtq09dtu">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtq0op6h">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtq0op6h">
 </head>
 <body data-tour-mode="overview">
   <!-- The residence engine runs hidden and paused: the viewer lifts its standard hinged door from it. -->
@@ -34,6 +34,10 @@
     </div>
     <form id="tour-tune" hidden>
       <div class="tune-head"><strong>Lighting</strong><span>T to close · click view to look again</span></div>
+      <label>Downlight power <input type="range" name="power" min="0" max="40" step="0.5"><output></output></label>
+      <label>Downlight halo <input type="range" name="halo" min="0" max="0.6" step="0.01"><output></output></label>
+      <label>Floor light <input type="range" name="floor" min="0" max="2" step="0.05"><output></output></label>
+      <label>Wall light <input type="range" name="wall" min="0" max="2" step="0.05"><output></output></label>
       <label>Daylight base <input type="range" name="base" min="0" max="2" step="0.05"><output></output></label>
       <label>Exposure <input type="range" name="exposure" min="0.4" max="2" step="0.02"><output></output></label>
       <label>Window reflection <input type="range" name="glass" min="0" max="4" step="0.1"><output></output></label>
@@ -58,8 +62,8 @@
   </section>
 
   <script>window.__RESIDENCE_PAUSED__ = true;   /* the engine only supplies geometry here; it never draws */</script>
-  <script src="tour/js/residence-sound.js?v=mtq09dtu"></script>
-  <script src="tour/js/residence-model.js?v=mtq09dtu"></script>
-  <script src="tour/js/plan.bundle.js?v=mtq09dtu"></script>
+  <script src="tour/js/residence-sound.js?v=mtq0op6h"></script>
+  <script src="tour/js/residence-model.js?v=mtq0op6h"></script>
+  <script src="tour/js/plan.bundle.js?v=mtq0op6h"></script>
 </body>
 </html>

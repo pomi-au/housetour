@@ -42,12 +42,23 @@ The viewer is `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; it only or
 | --- | --- |
 | `tour/js/model/materials.js` | `createMaterials({ renderer })` returns the tour's finishes: `materialFor(key, spec, finish)` by material family and finish (concrete, face brick, render, paint, carpet, tile, timber, metal, roof sheet, fascia, glass), `finishes.*` one function each, `fixtures` (frame, glass, sill, paint, metal), `grassTexture()`, `streetTexture()`, `lightPoolTexture()`, `setGlass(strength)`. All textures are canvases made at run time. |
 | `tour/js/model/surfaces.js` | `buildSlab`, `buildFooting`, `buildRoof`, `buildWall(el, openings, material, frame)` (a rectangular wall crossed by openings is rebuilt as pieces around the holes), `buildFascia(eaveLine)`, `buildGlazing(opening)`, `openingBoxes(fixtures)`, `floorTriangles(mesh, y)`, `meshFromFaces`, `prism`. Plan metres in, world meshes out, centred by `frame = { cx, cy }`. |
+| `tour/js/model/lighting.js` | `planDownlights(json)` finds the rooms and plans the downlights (see below); `createRoomMask(pool)` is the tour's shader gate that confines each pooled spot light and its halo to its room; `buildDownlightFixtures(lights, frame)` makes the instanced bezel, lens and trim. |
 | `tour/js/fixtures/hinged-door.js` | `extractStandardDoor(window.RESIDENCE)` reads the tour's door D04 (Metro 95 frame, leaf, hinges, lever set) from the residence engine, which `model.html` loads hidden and paused. `createHingedDoor({ model, width, hinge: 'L' or 'R', position, rotationDeg, materials })` places it at any width: the hinge half keeps its shape, the strike half shifts. `openingFor(model, width)` is the wall opening the frame needs. `fixture.toggle(sideSign)` swings the leaf. |
 | `tour/js/fixtures/window.js` | `createWindow({ width, height, depth, position, rotationDeg, materials })`: aluminium frame, mullions, glass, sill. |
 | `tour/js/fixtures/sliding-door.js` | `createSlidingDoor({ width, height, depth, position, rotationDeg, materials, slide })`: frame, glazed panels, one slides on `toggle()`. |
 | `tour/js/fixtures/common.js` | `placeFixture(group, position, rotationDeg)`, `box`, `motion`, `defaultMaterials`. |
 
 Fixture convention: local x runs along the opening width, y up, z across the wall; the origin is the opening centre at sill level; `rotationDeg` is the house model's `rotation_deg` (0 = along plan x, 90 = along plan y). Operable fixtures expose `group.userData.fixture = { kind, meshes, toggle, step, open, moving }`.
+
+### Downlights
+
+The house model carries no lights, so the viewer plans them:
+
+1. **Rooms.** The slab top is rasterised at 0.1 m. Wall rectangles grown by 30 mm are solid, doors and windows close their openings, and cells with no roof above are outside. The floor cells flood-fill into rooms; rooms under 1.5 m² are dropped.
+2. **Ceiling.** Each room's flat ceiling is the lower of the surrounding wall tops and the lowest roof point over the room, between 2.2 and 4.0 m. Walls of clearly different heights around a room mean a raking ceiling: the roof underside is used and each light follows it. Flat rooms get a plasterboard ceiling slab per rectangle.
+3. **Layout.** Each room is peeled into rectangles (largest first, until 90 % is covered). Spacing is the ceiling height, held between 1.6 and 2.6 m; a rectangle gets a grid of round(width / spacing) by round(depth / spacing) lights with an edge offset of half a spacing. Rooms narrower than 1.6 m get one row, a light every 2.2 m.
+4. **Clearance.** A light within 0.45 m of a wall moves to the nearest clear cell of its room within 1 m, else it is dropped. Lights closer than 1.2 m are merged. Rooms with none, or more than 12, are logged.
+5. **Lights.** The tour's pool applies: 32 spot lights with a halo point light each, the nearest fixtures take a slot and fade in, the nearest three cast shadow maps, the rest are confined by their room's two boxes in the shader. Power, halo, floor and wall sliders are in the `T` panel. Every fixture is on; there are no switches.
 
 Sample files can sit in `models/` (not committed).
 

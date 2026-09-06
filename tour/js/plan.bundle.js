@@ -35654,16 +35654,18 @@ void main() {
 
   // ../js/model/materials.js
   var PHYSICAL_ONLY = ["clearcoat", "clearcoatRoughness", "sheen", "sheenRoughness", "specularIntensity", "transmission", "thickness", "ior", "reflectivity"];
-  function createMaterials({ renderer, physical = false, glassStrength = 2.4 } = {}) {
+  function createMaterials({ renderer, physical = false, glassStrength = 2.4, patch = null } = {}) {
     const maxAniso = renderer ? renderer.capabilities.getMaxAnisotropy() : 1;
     const reliefTextures = {}, albedoTextures = {}, surfaceTextures = {};
     const glassMaterials = [];
     let glass = glassStrength;
-    function surfaceMaterial(params) {
-      if (physical) return new MeshPhysicalMaterial(params);
-      const p = { ...params };
-      for (const k of PHYSICAL_ONLY) delete p[k];
-      return new MeshStandardMaterial(p);
+    function surfaceMaterial(params, surface = "wall") {
+      const m = physical ? new MeshPhysicalMaterial(params) : new MeshStandardMaterial((() => {
+        const p = { ...params };
+        for (const k of PHYSICAL_ONLY) delete p[k];
+        return p;
+      })());
+      return patch ? patch(m, surface) : m;
     }
     function reliefTexture(name, size, passes) {
       if (reliefTextures[name]) return reliefTextures[name];
@@ -35730,8 +35732,9 @@ void main() {
     const finishes = {
       concrete: (spec) => {
         const b = renderRelief();
-        return surfaceMaterial({ ...common2, color: 10394775, roughness: spec?.roughness ?? 0.9, metalness: spec?.metalness ?? 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.1 });
+        return surfaceMaterial({ ...common2, color: 10394775, roughness: spec?.roughness ?? 0.9, metalness: spec?.metalness ?? 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.1 }, "floor");
       },
+      ceiling: () => surfaceMaterial({ ...common2, color: 15131613, roughness: 1, metalness: 0, envMapIntensity: 0.15 }),
       brick: (spec) => {
         const b = renderRelief();
         return surfaceMaterial({ ...common2, color: 11037274, roughness: spec?.roughness ?? 0.95, metalness: 0, envMapIntensity: 0.3, map: albedoFromRelief(b, 250, 0.4), bumpMap: b, bumpScale: 0.1 });
@@ -35746,9 +35749,9 @@ void main() {
       },
       carpet: () => {
         const b = carpetRelief();
-        return surfaceMaterial({ ...common2, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(b, 240, 0.9), bumpMap: b, bumpScale: 0.08 });
+        return surfaceMaterial({ ...common2, roughness: 1, metalness: 0, envMapIntensity: 0.25, map: albedoFromRelief(b, 240, 0.9), bumpMap: b, bumpScale: 0.08 }, "floor");
       },
-      tile: (spec) => surfaceMaterial({ ...common2, color: 14605268, roughness: spec?.roughness ?? 0.18, metalness: 0, envMapIntensity: 0.6 }),
+      tile: (spec) => surfaceMaterial({ ...common2, color: 14605268, roughness: spec?.roughness ?? 0.18, metalness: 0, envMapIntensity: 0.6 }, "floor"),
       timber: (spec) => surfaceMaterial({ ...common2, color: 11831896, roughness: spec?.roughness ?? 0.55, metalness: 0, envMapIntensity: 0.35 }),
       metal: (spec) => surfaceMaterial({ ...common2, color: 12172479, roughness: spec?.roughness ?? 0.28, metalness: spec?.metalness ?? 0.92, envMapIntensity: 1.2 }),
       roof: () => surfaceMaterial({ ...common2, color: 6251624, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.6 }),
@@ -35758,7 +35761,7 @@ void main() {
         m.userData.baseEnv = 1;
         m.envMapIntensity = glass;
         glassMaterials.push(m);
-        return m;
+        return patch ? patch(m, "wall") : m;
       }
     };
     function finishFor(key, spec, finish) {
@@ -36065,6 +36068,11 @@ void main() {
     const p = prism(contour, (x, y) => zAt(x, y) + FASCIA.rise, (x, y) => zAt(x, y) - FASCIA.depth);
     return meshFromFaces(p.vertices, p.faces, material, frame, { id: line.id || "eave", category: "fascia" });
   }
+  function buildCeiling(rect, z, material, frame, grow = 0.12) {
+    const [x0, y0, x1, y1] = rect;
+    const p = prism([[x0 - grow, y0 - grow], [x1 + grow, y0 - grow], [x1 + grow, y1 + grow], [x0 - grow, y1 + grow]], () => z + 0.12, () => z);
+    return meshFromFaces(p.vertices, p.faces, material, frame, { category: "ceiling" });
+  }
   function buildGlazing(o, material, frame) {
     const t = 3e-3;
     const contour = o.alongX ? [[o.x0, o.cy - t], [o.x1, o.cy - t], [o.x1, o.cy + t], [o.x0, o.cy + t]] : [[o.cx - t, o.y0], [o.cx + t, o.y0], [o.cx + t, o.y1], [o.cx - t, o.y1]];
@@ -36072,6 +36080,334 @@ void main() {
     const m = meshFromFaces(p.vertices, p.faces, material, frame, { id: `${o.id}-glass`, category: "glazing" });
     if (m) m.castShadow = false;
     return m;
+  }
+
+  // ../js/model/lighting.js
+  function planDownlights(json, options = {}) {
+    const o = { cell: 0.1, wallGrow: 0.03, minArea: 1.5, spacingMin: 1.6, spacingMax: 2.6, wallClear: 0.45, mergeDistance: 1.2, ceilingAllowance: 0.3, maxPerRoom: 12, ...options };
+    const elements = (json.elements || []).filter((el) => Array.isArray(el.vertices) && Array.isArray(el.faces));
+    const slabs = elements.filter((el) => el.category === "slab"), walls = elements.filter((el) => el.category === "wall"), roofs = elements.filter((el) => el.category === "roof");
+    if (!slabs.length) return { rooms: [], lights: [], grid: null };
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const el of slabs) for (const [x, y] of el.vertices) {
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    const c = o.cell, W = Math.ceil((x1 - x0) / c) + 1, H = Math.ceil((y1 - y0) / c) + 1;
+    const state = new Uint8Array(W * H);
+    const roofZ = new Float32Array(W * H).fill(NaN);
+    const wallTop = new Float32Array(W * H);
+    const idx = (i, j) => j * W + i;
+    const toCell = (x, y) => [Math.floor((x - x0) / c), Math.floor((y - y0) / c)];
+    const centre = (i, j) => [x0 + (i + 0.5) * c, y0 + (j + 0.5) * c];
+    const rasterTriangle = (a, b, d, fn) => {
+      const minI = Math.max(0, Math.floor((Math.min(a[0], b[0], d[0]) - x0) / c)), maxI = Math.min(W - 1, Math.floor((Math.max(a[0], b[0], d[0]) - x0) / c));
+      const minJ = Math.max(0, Math.floor((Math.min(a[1], b[1], d[1]) - y0) / c)), maxJ = Math.min(H - 1, Math.floor((Math.max(a[1], b[1], d[1]) - y0) / c));
+      const det = (b[0] - a[0]) * (d[1] - a[1]) - (d[0] - a[0]) * (b[1] - a[1]);
+      if (Math.abs(det) < 1e-12) return;
+      for (let j = minJ; j <= maxJ; j++) for (let i = minI; i <= maxI; i++) {
+        const [px2, py2] = centre(i, j);
+        const l1 = ((b[0] - px2) * (d[1] - py2) - (d[0] - px2) * (b[1] - py2)) / det;
+        const l2 = ((d[0] - px2) * (a[1] - py2) - (a[0] - px2) * (d[1] - py2)) / det;
+        const l3 = 1 - l1 - l2;
+        if (l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6) fn(i, j, l1, l2, l3);
+      }
+    };
+    for (const el of slabs) {
+      const top = Math.max(...el.vertices.map((v) => v[2]));
+      for (const f of el.faces) {
+        const v = f.map((k) => el.vertices[k]);
+        if (v.some((p) => p[2] < top - 0.01)) continue;
+        rasterTriangle(v[0], v[1], v[2], (i, j) => {
+          state[idx(i, j)] = 1;
+        });
+      }
+    }
+    for (const el of roofs) for (const f of el.faces) {
+      const v = f.map((k) => el.vertices[k]);
+      rasterTriangle(v[0], v[1], v[2], (i, j, l1, l2, l3) => {
+        const z = l1 * v[0][2] + l2 * v[1][2] + l3 * v[2][2], k = idx(i, j);
+        if (Number.isNaN(roofZ[k]) || z < roofZ[k]) roofZ[k] = z;
+      });
+    }
+    for (const el of walls) {
+      let wx0 = Infinity, wy0 = Infinity, wx1 = -Infinity, wy1 = -Infinity, top = 0;
+      for (const [x, y, z] of el.vertices) {
+        wx0 = Math.min(wx0, x);
+        wx1 = Math.max(wx1, x);
+        wy0 = Math.min(wy0, y);
+        wy1 = Math.max(wy1, y);
+        top = Math.max(top, z);
+      }
+      const [i0, j0] = toCell(wx0 - o.wallGrow, wy0 - o.wallGrow), [i1, j1] = toCell(wx1 + o.wallGrow, wy1 + o.wallGrow);
+      for (let j = Math.max(0, j0); j <= Math.min(H - 1, j1); j++) for (let i = Math.max(0, i0); i <= Math.min(W - 1, i1); i++) {
+        const k = idx(i, j);
+        state[k] = 2;
+        wallTop[k] = Math.max(wallTop[k], top);
+      }
+    }
+    for (const f of json.fixtures || []) {
+      const [px2, py2] = f.position || [];
+      if (!Number.isFinite(px2) || !Number.isFinite(py2) || !(f.width_m > 0)) continue;
+      const alongX = Math.abs((Number(f.rotation_deg) || 0) % 180) < 45;
+      const w = f.width_m / 2 + o.wallGrow, d = (f.depth_m > 0 ? f.depth_m : 0.3) / 2 + o.wallGrow;
+      const [i0, j0] = toCell(px2 - (alongX ? w : d), py2 - (alongX ? d : w)), [i1, j1] = toCell(px2 + (alongX ? w : d), py2 + (alongX ? d : w));
+      const top = Number.isFinite(f.head_m) ? f.head_m : 2.1;
+      for (let j = Math.max(0, j0); j <= Math.min(H - 1, j1); j++) for (let i = Math.max(0, i0); i <= Math.min(W - 1, i1); i++) {
+        const k = idx(i, j);
+        if (state[k] !== 2) {
+          state[k] = 2;
+          wallTop[k] = top;
+        }
+      }
+    }
+    for (let k = 0; k < W * H; k++) if (state[k] === 1 && Number.isNaN(roofZ[k])) state[k] = 0;
+    const room = new Int32Array(W * H).fill(-1);
+    const rooms = [];
+    const stack = [];
+    for (let s = 0; s < W * H; s++) {
+      if (state[s] !== 1 || room[s] >= 0) continue;
+      const cells = [];
+      stack.push(s);
+      room[s] = rooms.length;
+      while (stack.length) {
+        const k = stack.pop();
+        cells.push(k);
+        const i = k % W, j = (k - i) / W;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const ni = i + di, nj = j + dj;
+          if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
+          const nk = idx(ni, nj);
+          if (state[nk] === 1 && room[nk] < 0) {
+            room[nk] = rooms.length;
+            stack.push(nk);
+          }
+        }
+      }
+      rooms.push({ id: `room-${rooms.length + 1}`, cells });
+    }
+    const kept = [];
+    for (const r of rooms) {
+      if (r.cells.length * c * c < o.minArea) {
+        for (const k of r.cells) room[k] = -1;
+        continue;
+      }
+      kept.push(r);
+    }
+    kept.forEach((r, n) => {
+      r.index = n;
+      for (const k of r.cells) room[k] = n;
+    });
+    const median = (arr) => {
+      if (!arr.length) return NaN;
+      const s = [...arr].sort((a, b) => a - b);
+      return s[Math.floor(s.length / 2)];
+    };
+    const largestRect = (mask) => {
+      const heights = new Int32Array(W);
+      let best = { area: 0 };
+      for (let j = 0; j < H; j++) {
+        for (let i = 0; i < W; i++) heights[i] = mask[idx(i, j)] ? heights[i] + 1 : 0;
+        const st = [];
+        for (let i = 0; i <= W; i++) {
+          const h = i < W ? heights[i] : 0;
+          let start = i;
+          while (st.length && st[st.length - 1][1] > h) {
+            const [s0, sh] = st.pop();
+            const area2 = sh * (i - s0);
+            if (area2 > best.area) best = { area: area2, i0: s0, i1: i - 1, j0: j - sh + 1, j1: j };
+            start = s0;
+          }
+          st.push([start, h]);
+        }
+      }
+      return best.area ? best : null;
+    };
+    const wallClearCells = Math.ceil(o.wallClear / c);
+    const nearWall = (i, j, r = wallClearCells) => {
+      for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+        const ni = i + di, nj = j + dj;
+        if (ni < 0 || nj < 0 || ni >= W || nj >= H) return true;
+        if (state[idx(ni, nj)] !== 1 && di * di + dj * dj <= r * r) return true;
+      }
+      return false;
+    };
+    const lights = [];
+    for (const r of kept) {
+      const roofs2 = [], tops = [];
+      for (const k of r.cells) {
+        roofs2.push(roofZ[k]);
+        const i = k % W, j = (k - i) / W;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nk = idx(i + di, j + dj);
+          if (state[nk] === 2 && wallTop[nk] > 0) tops.push(wallTop[nk]);
+        }
+      }
+      const roofMin = Math.min(...roofs2), wallCeil = tops.length ? median(tops) : Infinity;
+      r.ceiling = Math.min(Math.max(2.2, Math.min(roofMin - 0.05, wallCeil)), 4);
+      r.raked = tops.length > 0 && Math.max(...tops) - Math.min(...tops) > 0.6 && roofMin > r.ceiling + 0.6;
+      r.area = r.cells.length * c * c;
+      const mask = new Uint8Array(W * H);
+      for (const k of r.cells) mask[k] = 1;
+      let remaining = r.cells.length;
+      r.rects = [];
+      while (remaining > r.cells.length * 0.1 && r.rects.length < 8) {
+        const b = largestRect(mask);
+        if (!b || b.area * c * c < 0.8) break;
+        for (let j = b.j0; j <= b.j1; j++) for (let i = b.i0; i <= b.i1; i++) {
+          mask[idx(i, j)] = 0;
+        }
+        remaining -= b.area;
+        r.rects.push({ x0: x0 + b.i0 * c, y0: y0 + b.j0 * c, x1: x0 + (b.i1 + 1) * c, y1: y0 + (b.j1 + 1) * c, area: b.area * c * c });
+      }
+      r.boxes = r.rects.slice(0, 2).map((q) => [q.x0 - 0.3, q.y0 - 0.3, q.x1 + 0.3, q.y1 + 0.3]);
+      const spacing = Math.min(o.spacingMax, Math.max(o.spacingMin, r.ceiling));
+      const roomLights = [];
+      for (const q of r.rects) {
+        const w = q.x1 - q.x0, d = q.y1 - q.y0;
+        const spots = [];
+        if (Math.min(w, d) < 1.6) {
+          const alongX = w >= d, L = Math.max(w, d), n = Math.max(1, Math.round(L / 2.2));
+          for (let k = 0; k < n; k++) {
+            const t = (k + 0.5) / n;
+            spots.push(alongX ? [q.x0 + t * w, (q.y0 + q.y1) / 2] : [(q.x0 + q.x1) / 2, q.y0 + t * d]);
+          }
+        } else {
+          const cols = Math.max(1, Math.round(w / spacing)), rows = Math.max(1, Math.round(d / spacing));
+          for (let a = 0; a < cols; a++) for (let b = 0; b < rows; b++) spots.push([q.x0 + (a + 0.5) * w / cols, q.y0 + (b + 0.5) * d / rows]);
+        }
+        for (const [sx, sy] of spots) {
+          let [i, j] = toCell(sx, sy), ok = room[idx(i, j)] === r.index && !nearWall(i, j);
+          if (!ok) {
+            const reach = Math.round(1 / c);
+            let best = null;
+            for (let dj = -reach; dj <= reach && !best; dj++) for (let di = -reach; di <= reach; di++) {
+              const ni = i + di, nj = j + dj;
+              if (ni < 0 || nj < 0 || ni >= W || nj >= H || room[idx(ni, nj)] !== r.index || nearWall(ni, nj)) continue;
+              const dist = di * di + dj * dj;
+              if (!best || dist < best.dist) best = { i: ni, j: nj, dist };
+            }
+            if (!best) continue;
+            i = best.i;
+            j = best.j;
+            ok = true;
+          }
+          const [px2, py2] = ok ? centre(i, j) : [sx, sy];
+          if (roomLights.some((l) => Math.hypot(l.x - px2, l.y - py2) < o.mergeDistance)) continue;
+          roomLights.push({ x: px2, y: py2 });
+        }
+      }
+      for (const l of roomLights) {
+        const [i, j] = toCell(l.x, l.y);
+        const z = r.raked ? Math.min(roofZ[idx(i, j)] - 0.15, 4) : r.ceiling;
+        lights.push({ x: l.x, y: l.y, z, room: r.index });
+      }
+      r.lights = roomLights.length;
+      if (roomLights.length > o.maxPerRoom) console.warn(`[lighting] ${r.id}: ${roomLights.length} lights over ${r.area.toFixed(1)} m2`);
+      if (!roomLights.length) console.warn(`[lighting] ${r.id}: no light fits (${r.area.toFixed(1)} m2)`);
+      delete r.cells;
+    }
+    return { rooms: kept, lights, grid: { x0, y0, cell: c, W, H, state, room } };
+  }
+  function createRoomMask(pool) {
+    const uniforms = {
+      uRoomBoxA: { value: Array.from({ length: pool }, () => new Vector4()) },
+      uRoomBoxB: { value: Array.from({ length: pool }, () => new Vector4()) },
+      uRoomY: { value: Array.from({ length: pool }, () => new Vector2()) },
+      uHaloSlot: { value: Array.from({ length: pool + 4 }, (_, i) => Math.min(i, pool - 1)) }
+    };
+    const scale = { floor: { value: 0.6 }, wall: { value: 1 }, screen: { value: 0.2 } };
+    function spotLoopWithRoomGate() {
+      const chunk = ShaderChunk.lights_fragment_begin;
+      const start = chunk.indexOf("#if ( NUM_SPOT_LIGHTS > 0 ) && defined( RE_Direct )");
+      const end = chunk.indexOf("#pragma unroll_loop_end", start);
+      let loop = chunk.slice(start, end).replace("spotLight = spotLights[ i ];", "spotLight = spotLights[ i ];\n		if ( roomMask( UNROLLED_LOOP_INDEX, roomWorldPos ) > 0.0 ) {").replace("getSpotLightInfo( spotLight, geometryPosition, directLight );", "getSpotLightInfo( spotLight, geometryPosition, directLight );\n		directLight.color *= uLightScale;").replace(
+        "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );",
+        "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );\n		}"
+      );
+      let out = chunk.slice(0, start) + loop + chunk.slice(end);
+      const ps = out.indexOf("#if ( NUM_POINT_LIGHTS > 0 ) && defined( RE_Direct )");
+      const pe = out.indexOf("#pragma unroll_loop_end", ps);
+      const ploop = out.slice(ps, pe).replace("pointLight = pointLights[ i ];", `pointLight = pointLights[ i ];
+		if ( UNROLLED_LOOP_INDEX >= ${pool} || roomMask( uHaloSlot[ UNROLLED_LOOP_INDEX ], roomWorldPos ) > 0.0 ) {`).replace(
+        "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );",
+        "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );\n		}"
+      );
+      return out.slice(0, ps) + ploop + out.slice(pe);
+    }
+    function patch(material, surface = "wall") {
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uLightScale = scale[surface] || scale.wall;
+        shader.uniforms.uRoomBoxA = uniforms.uRoomBoxA;
+        shader.uniforms.uRoomBoxB = uniforms.uRoomBoxB;
+        shader.uniforms.uRoomY = uniforms.uRoomY;
+        shader.uniforms.uHaloSlot = uniforms.uHaloSlot;
+        shader.fragmentShader = shader.fragmentShader.replace("#include <lights_fragment_begin>", "vec3 roomWorldPos = cameraPosition + ( -vViewPosition ) * mat3( viewMatrix );\n#include <lights_fragment_begin>").replace("#include <common>", `#include <common>
+uniform float uLightScale;
+uniform vec4 uRoomBoxA[${pool}];
+uniform vec4 uRoomBoxB[${pool}];
+uniform vec2 uRoomY[${pool}];
+uniform int uHaloSlot[${pool + 4}];
+float roomMask(int i, vec3 vRoomPos) {
+  vec4 a = uRoomBoxA[i]; vec4 b = uRoomBoxB[i]; vec2 y = uRoomY[i];
+  bool inA = vRoomPos.x >= a.x && vRoomPos.x <= a.z && vRoomPos.z >= a.y && vRoomPos.z <= a.w;
+  bool inB = vRoomPos.x >= b.x && vRoomPos.x <= b.z && vRoomPos.z >= b.y && vRoomPos.z <= b.w;
+  bool inY = vRoomPos.y >= y.x && vRoomPos.y <= y.y;
+  return (inY && (inA || inB)) ? 1.0 : 0.0;
+}`).replace("#include <lights_fragment_begin>", spotLoopWithRoomGate());
+      };
+      material.customProgramCacheKey = () => "roommask" + pool + surface;
+      return material;
+    }
+    function setRoom(slot, boxes, yLo, yHi, unmasked = false) {
+      const a = uniforms.uRoomBoxA.value[slot], b = uniforms.uRoomBoxB.value[slot], y = uniforms.uRoomY.value[slot];
+      if (unmasked) {
+        a.set(-1e9, -1e9, 1e9, 1e9);
+        b.set(1e9, 1e9, 1e9, 1e9);
+        y.set(-1e9, 1e9);
+        return;
+      }
+      const set = (v, box2) => {
+        if (!box2) v.set(1e9, 1e9, 1e9, 1e9);
+        else v.set(Math.min(box2[0], box2[2]), Math.min(box2[1], box2[3]), Math.max(box2[0], box2[2]), Math.max(box2[1], box2[3]));
+      };
+      set(a, boxes?.[0]);
+      set(b, boxes?.[1]);
+      if (!boxes?.length) y.set(1e9, 1e9);
+      else y.set(yLo, yHi);
+    }
+    return { pool, uniforms, scale, patch, setRoom, haloSlot: uniforms.uHaloSlot.value };
+  }
+  function buildDownlightFixtures(lights, frame) {
+    const n = Math.max(1, lights.length);
+    const bezelGeo = new TorusGeometry(0.046, 7e-3, 10, 36);
+    bezelGeo.rotateX(Math.PI / 2);
+    const bezel = new InstancedMesh(bezelGeo, new MeshPhysicalMaterial({ color: 16185076, roughness: 0.35, metalness: 0.05 }), n);
+    const lensGeo = new CircleGeometry(0.04, 28);
+    lensGeo.rotateX(Math.PI / 2);
+    const lens = new InstancedMesh(lensGeo, new MeshBasicMaterial({ color: 16777215 }), n);
+    const trimGeo = new CylinderGeometry(0.048, 0.052, 0.03, 36, 1, true);
+    const trim = new InstancedMesh(trimGeo, new MeshPhysicalMaterial({ color: 14605526, roughness: 0.6, side: BackSide }), n);
+    const m = new Matrix4();
+    lights.forEach((l, i) => {
+      const x = l.x - frame.cx, z = -(l.y - frame.cy), ceilingY = l.z;
+      m.makeTranslation(x, ceilingY - 4e-3, z);
+      bezel.setMatrixAt(i, m);
+      m.makeTranslation(x, ceilingY - 0.012, z);
+      lens.setMatrixAt(i, m);
+      m.makeTranslation(x, ceilingY + 0.012, z);
+      trim.setMatrixAt(i, m);
+      lens.setColorAt(i, new Color(0.95, 0.9, 0.8));
+    });
+    bezel.count = lens.count = trim.count = lights.length;
+    bezel.castShadow = false;
+    lens.castShadow = false;
+    trim.castShadow = false;
+    for (const o of [bezel, lens, trim]) o.raycast = () => {
+    };
+    return { bezel, lens, trim };
   }
 
   // ../js/fixtures/common.js
@@ -36345,7 +36681,8 @@ void main() {
     const WALK_SPEED = 1.45, RUN_SPEED = 2.8;
     const GRAVITY = 9.81;
     const TOUCH2 = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
-    const RENDER = { dpr: TOUCH2 ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true };
+    const RENDER = { dpr: TOUCH2 ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH2 ? 2 : 3, shadowSize: 512, haloLights: true };
+    const SPOT_POOL = RENDER.lights;
     const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1, base: 1, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
     const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
     const TUNE_KEY = "residence.tour.lighting.v1";
@@ -36417,7 +36754,10 @@ void main() {
       renderer.shadowMap.needsUpdate = true;
     }
     window.addEventListener("resize", applyQuality);
-    const mats = createMaterials({ renderer, glassStrength: tune.glass });
+    const roomMask = createRoomMask(SPOT_POOL);
+    roomMask.scale.floor.value = tune.floor;
+    roomMask.scale.wall.value = tune.wall;
+    const mats = createMaterials({ renderer, glassStrength: tune.glass, patch: roomMask.patch });
     const { surfaceMaterial } = mats;
     const doorModel = extractStandardDoor(window.RESIDENCE);
     if (doorModel) console.info(`[plan] standard door from the residence engine: frame ${doorModel.u0.toFixed(3)}..${doorModel.u1.toFixed(3)} m, ${doorModel.top.toFixed(3)} m high`);
@@ -36629,6 +36969,39 @@ void main() {
         fixtures.push(g);
         fixtureMeshes.push(...g.userData.fixture.meshes);
       }
+      const lighting = planDownlights(json);
+      const ceilingMaterial = mats.finishes.ceiling();
+      for (const r of lighting.rooms) {
+        if (r.raked) continue;
+        r.rects.forEach((q, k) => place(buildCeiling([q.x0, q.y0, q.x1, q.y1], r.ceiling - 1e-3 * k, ceilingMaterial, frame2), meshes));
+      }
+      const leds = lighting.lights.map((l) => ({
+        world: [l.x - frame2.cx, l.z + floorTop, -(l.y - frame2.cy)],
+        room: lighting.rooms[l.room],
+        boxes: lighting.rooms[l.room].boxes.map((b) => [b[0] - frame2.cx, -(b[3] - frame2.cy), b[2] - frame2.cx, -(b[1] - frame2.cy)]),
+        yLo: floorTop - 0.45,
+        yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
+      }));
+      const fittings = buildDownlightFixtures(lighting.lights.map((l) => ({ ...l, z: l.z + floorTop })), frame2);
+      root.add(fittings.bezel, fittings.lens, fittings.trim);
+      const spots = [];
+      for (let i = 0; i < Math.min(SPOT_POOL, Math.max(1, leds.length)); i++) {
+        const light = RENDER.haloLights ? new SpotLight(16777215, 0, 6.5, MathUtils.degToRad(55), 0.36, 2) : new SpotLight(16777215, 0, 6.5, MathUtils.degToRad(64), 0.65, 2);
+        light.target = new Object3D();
+        light.castShadow = false;
+        light.shadow.mapSize.set(RENDER.shadowSize, RENDER.shadowSize);
+        light.shadow.autoUpdate = false;
+        light.shadow.bias = -4e-4;
+        light.shadow.normalBias = 0.03;
+        light.shadow.camera.near = 0.1;
+        light.shadow.radius = 4;
+        const halo = RENDER.haloLights ? new PointLight(16777215, 0, 5, 2) : null;
+        if (halo) halo.castShadow = false;
+        light.userData = { led: null, target: 0, current: 0, halo };
+        root.add(light, light.target);
+        if (halo) root.add(halo);
+        spots.push(light);
+      }
       let triangles = 0;
       for (const m of [...meshes, ...fixtureMeshes]) triangles += m.geometry.attributes.position.count / 3;
       const mpos = [];
@@ -36702,11 +37075,11 @@ void main() {
       scene.add(root);
       root.updateMatrixWorld(true);
       const box2 = new Box3(new Vector3(-hx, z0, -hz), new Vector3(hx, z1, hz));
-      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length };
+      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens };
       lastSunUpdate = -1;
       applyQuality();
       const doors = fixtures.filter((g) => g.userData.fixture.kind === "hinged door").length;
-      modelName.textContent = `${json.job || name} \xB7 ${meshes.length} surfaces \xB7 ${openings.length} openings \xB7 ${doors} doors \xB7 ${Math.round(triangles / 1e3)}k triangles`;
+      modelName.textContent = `${json.job || name} \xB7 ${meshes.length} surfaces \xB7 ${openings.length} openings \xB7 ${doors} doors \xB7 ${lighting.rooms.length} rooms \xB7 ${leds.length} downlights \xB7 ${Math.round(triangles / 1e3)}k triangles`;
       document.title = `${json.job || name} \xB7 House model`;
       console.info(`[plan] model: ${meshes.length} surfaces, ${fixtures.length} fixtures, ${Math.round(triangles)} triangles, floor at ${floorTop.toFixed(3)} m`);
       return built;
@@ -36942,6 +37315,81 @@ void main() {
       world.ambient.intensity = 0.7 * indoor * tune.base * dl;
       scene.environmentIntensity = 0.55;
     }
+    let shadowPickTimer = 0;
+    const ledDistance = /* @__PURE__ */ new Map();
+    function updateLights(dt) {
+      if (!built || !built.spots.length) return;
+      const { spots, leds } = built;
+      const eye = camera.position;
+      for (const led of leds) ledDistance.set(led, Math.hypot(led.world[0] - eye.x, led.world[1] - eye.y, led.world[2] - eye.z));
+      const wanted = [...leds].sort((a, b) => ledDistance.get(a) - ledDistance.get(b)).slice(0, spots.length);
+      const wantedSet = new Set(wanted);
+      let changed = false;
+      const served = /* @__PURE__ */ new Set();
+      for (const spot of spots) {
+        if (spot.userData.led && wantedSet.has(spot.userData.led)) {
+          served.add(spot.userData.led);
+          spot.userData.target = 1;
+        } else spot.userData.target = 0;
+      }
+      for (const spot of spots) {
+        if (spot.userData.target === 0 && spot.userData.current < 0.02) {
+          const next = wanted.find((led) => !served.has(led));
+          if (next) {
+            spot.userData.led = next;
+            served.add(next);
+            spot.userData.target = 1;
+            spot.userData.current = 0;
+            spot.position.set(next.world[0], next.world[1], next.world[2]);
+            spot.target.position.set(next.world[0], next.world[1] - 3, next.world[2]);
+            spot.target.updateMatrixWorld();
+            spot.userData.halo?.position.set(next.world[0], next.world[1] - 0.06, next.world[2]);
+            changed = true;
+          }
+        }
+      }
+      for (const spot of spots) {
+        const k = 1 - Math.exp(-10 * dt);
+        spot.userData.current += (spot.userData.target - spot.userData.current) * k;
+        spot.color.setRGB(1, 0.9, 0.76);
+        spot.intensity = spot.userData.led ? spot.userData.current * tune.power : 0;
+        if (spot.userData.halo) {
+          spot.userData.halo.color.copy(spot.color);
+          spot.userData.halo.intensity = spot.intensity * tune.halo;
+        }
+        spot.visible = true;
+      }
+      shadowPickTimer += dt;
+      if (shadowPickTimer > 0.5 || changed) {
+        shadowPickTimer = 0;
+        const candidates = spots.filter((s) => s.userData.led && s.intensity > 0.01).sort((a, b) => ledDistance.get(a.userData.led) - ledDistance.get(b.userData.led));
+        const current = spots.filter((s) => s.castShadow);
+        const desired = candidates.slice(0, RENDER.shadowSpots);
+        const farthestKept = current.length ? Math.max(...current.map((s) => ledDistance.get(s.userData.led) ?? Infinity)) : Infinity;
+        const needSwap = current.length !== desired.length || desired.some((s) => !s.castShadow && ledDistance.get(s.userData.led) + 1 < farthestKept);
+        if (needSwap) {
+          const keep = new Set(desired);
+          for (const s of spots) if (s.castShadow !== keep.has(s)) {
+            s.castShadow = keep.has(s);
+            s.shadow.needsUpdate = true;
+          }
+          changed = true;
+        }
+      }
+      const order = [...spots.filter((s) => s.castShadow), ...spots.filter((s) => !s.castShadow)];
+      order.forEach((s, idx) => {
+        const led = s.userData.led;
+        if (led) roomMask.setRoom(idx, led.boxes, led.yLo, led.yHi, s.castShadow);
+        else roomMask.setRoom(idx, [], 0, 0);
+      });
+      spots.forEach((s, i) => {
+        roomMask.haloSlot[i] = order.indexOf(s);
+      });
+      if (changed) {
+        renderer.shadowMap.needsUpdate = true;
+        sceneDirty = 3;
+      }
+    }
     let focusFixture = null;
     function centreTarget(ndcX = 0, ndcY = 0) {
       if (!built || !built.fixtures.length) return null;
@@ -37045,9 +37493,11 @@ void main() {
       updateEnvironment(dt);
       if (stepFixtures(dt)) {
         renderer.shadowMap.needsUpdate = true;
+        for (const s of built?.spots || []) if (s.castShadow) s.shadow.needsUpdate = true;
         world.sun.shadow.needsUpdate = true;
         sceneDirty = 3;
       }
+      updateLights(dt);
       const poseKey = `${camera.position.x.toFixed(3)}|${camera.position.y.toFixed(3)}|${camera.position.z.toFixed(3)}|${camera.rotation.x.toFixed(4)}|${camera.rotation.y.toFixed(4)}|${zoomLevel.toFixed(3)}`;
       if (poseKey !== lastPoseKey || tune.clock) sceneDirty = 3;
       lastPoseKey = poseKey;
@@ -37055,7 +37505,7 @@ void main() {
       if (sceneDirty > 0) sceneDirty--;
       envFrame++;
       if (changing && (RENDER.lessOften || envFrame % 4 === 0)) {
-        const hidden = built && built.reflector.visible ? [built.reflector] : [];
+        const hidden = built ? [built.reflector, built.lens].filter((o) => o.visible) : [];
         hidden.forEach((o) => {
           o.visible = false;
         });
@@ -37088,7 +37538,10 @@ void main() {
         r.visible = floorInView;
         if (!floorInView) r.userData.fresh = false;
         if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !r.userData.fresh) && (changing || !r.userData.fresh)) {
+          const lensShown = built.lens.visible;
+          built.lens.visible = false;
           r.userData.renderMirror.call(r, renderer, scene, camera, r.geometry, r.material, null);
+          built.lens.visible = lensShown;
           r.userData.fresh = true;
         }
       }
@@ -37175,6 +37628,7 @@ void main() {
         body.dataset.tourMode = "walk";
         stepPlayer(0.016);
         renderer.shadowMap.needsUpdate = true;
+        for (const s of built.spots) s.shadow.needsUpdate = true;
         world.sun.shadow.needsUpdate = true;
         showHint(WALK_HINT);
         try {
@@ -37224,6 +37678,8 @@ void main() {
     }
     function applyTune() {
       mats.setGlass(tune.glass);
+      roomMask.scale.floor.value = tune.floor;
+      roomMask.scale.wall.value = tune.wall;
       try {
         localStorage.setItem(TUNE_KEY, JSON.stringify(tune));
       } catch (_) {

@@ -15,7 +15,8 @@ import { Sky } from 'three/addons/objects/Sky.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { createMaterials } from './model/materials.js';
-import { buildSlab, buildFooting, buildWall, buildRoof, buildFascia, buildGlazing, openingBoxes, floorTriangles } from './model/surfaces.js';
+import { buildSlab, buildFooting, buildWall, buildRoof, buildFascia, buildGlazing, buildCeiling, openingBoxes, floorTriangles } from './model/surfaces.js';
+import { planDownlights, createRoomMask, buildDownlightFixtures } from './model/lighting.js';
 import { extractStandardDoor, createHingedDoor, openingFor as doorOpeningFor } from './fixtures/hinged-door.js';
 import { createWindow } from './fixtures/window.js';
 import { createSlidingDoor } from './fixtures/sliding-door.js';
@@ -34,7 +35,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const WALK_SPEED = 1.45, RUN_SPEED = 2.8;
   const GRAVITY = 9.81;
   const TOUCH = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
-  const RENDER = { dpr: TOUCH ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true };
+  const RENDER = { dpr: TOUCH ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, haloLights: true };
+  const SPOT_POOL = RENDER.lights;   // pooled downlights; the nearest fixtures take a slot, the rest wait
   const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1.0, base: 1.0, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
   const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
   const TUNE_KEY = 'residence.tour.lighting.v1';   // shared with tour.html, so both pages show the same light
@@ -108,7 +110,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   window.addEventListener('resize', applyQuality);
 
   // ---------------------------------------------------------------- materials (model/materials.js)
-  const mats = createMaterials({ renderer, glassStrength: tune.glass });
+  const roomMask = createRoomMask(SPOT_POOL);
+  roomMask.scale.floor.value = tune.floor; roomMask.scale.wall.value = tune.wall;
+  const mats = createMaterials({ renderer, glassStrength: tune.glass, patch: roomMask.patch });
   const { surfaceMaterial } = mats;
   // The standard hinged door, read from the residence engine that model.html loads hidden.
   const doorModel = extractStandardDoor(window.RESIDENCE);
@@ -253,6 +257,37 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       root.add(g); fixtures.push(g);
       fixtureMeshes.push(...g.userData.fixture.meshes);
     }
+    // Downlights (model/lighting.js): rooms from the walls and roof, a flat ceiling per room, a fitting per light and
+    // the tour's pooled spot lights with halos, confined to their room by the mask.
+    const lighting = planDownlights(json);
+    const ceilingMaterial = mats.finishes.ceiling();
+    for (const r of lighting.rooms) {
+      if (r.raked) continue;   // the roof underside is the ceiling
+      r.rects.forEach((q, k) => place(buildCeiling([q.x0, q.y0, q.x1, q.y1], r.ceiling - 0.001 * k, ceilingMaterial, frame), meshes));
+    }
+    const leds = lighting.lights.map(l => ({
+      world: [l.x - frame.cx, l.z + floorTop, -(l.y - frame.cy)], room: lighting.rooms[l.room],
+      boxes: lighting.rooms[l.room].boxes.map(b => [b[0] - frame.cx, -(b[3] - frame.cy), b[2] - frame.cx, -(b[1] - frame.cy)]),
+      yLo: floorTop - 0.45, yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
+    }));
+    const fittings = buildDownlightFixtures(lighting.lights.map(l => ({ ...l, z: l.z + floorTop })), frame);
+    root.add(fittings.bezel, fittings.lens, fittings.trim);
+    const spots = [];
+    for (let i = 0; i < Math.min(SPOT_POOL, Math.max(1, leds.length)); i++) {
+      const light = RENDER.haloLights
+        ? new THREE.SpotLight(0xffffff, 0, 6.5, THREE.MathUtils.degToRad(55), 0.36, 2.0)
+        : new THREE.SpotLight(0xffffff, 0, 6.5, THREE.MathUtils.degToRad(64), 0.65, 2.0);
+      light.target = new THREE.Object3D();
+      light.castShadow = false;
+      light.shadow.mapSize.set(RENDER.shadowSize, RENDER.shadowSize);
+      light.shadow.autoUpdate = false;
+      light.shadow.bias = -0.0004; light.shadow.normalBias = 0.03; light.shadow.camera.near = 0.1;
+      light.shadow.radius = 4;
+      const halo = RENDER.haloLights ? new THREE.PointLight(0xffffff, 0, 5.0, 2.0) : null;
+      if (halo) halo.castShadow = false;
+      light.userData = { led: null, target: 0, current: 0, halo };
+      root.add(light, light.target); if (halo) root.add(halo); spots.push(light);
+    }
     let triangles = 0;
     for (const m of [...meshes, ...fixtureMeshes]) triangles += m.geometry.attributes.position.count / 3;
 
@@ -324,11 +359,11 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(root);
     root.updateMatrixWorld(true);
     const box = new THREE.Box3(new THREE.Vector3(-hx, z0, -hz), new THREE.Vector3(hx, z1, hz));
-    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length };
+    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens };
     lastSunUpdate = -1;
     applyQuality();
     const doors = fixtures.filter(g => g.userData.fixture.kind === 'hinged door').length;
-    modelName.textContent = `${json.job || name} · ${meshes.length} surfaces · ${openings.length} openings · ${doors} doors · ${Math.round(triangles / 1000)}k triangles`;
+    modelName.textContent = `${json.job || name} · ${meshes.length} surfaces · ${openings.length} openings · ${doors} doors · ${lighting.rooms.length} rooms · ${leds.length} downlights · ${Math.round(triangles / 1000)}k triangles`;
     document.title = `${json.job || name} · House model`;
     console.info(`[plan] model: ${meshes.length} surfaces, ${fixtures.length} fixtures, ${Math.round(triangles)} triangles, floor at ${floorTop.toFixed(3)} m`);
     return built;
@@ -509,6 +544,63 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.environmentIntensity = 0.55;
   }
 
+  // ---------------------------------------------------------------- downlights update (as tour.js)
+  // The nearest fixtures take the pooled spot lights (fading in and out as the walker moves); the nearest few of
+  // those cast real shadow maps, the rest are confined by their room boxes.
+  let shadowPickTimer = 0;
+  const ledDistance = new Map();
+  function updateLights(dt) {
+    if (!built || !built.spots.length) return;
+    const { spots, leds } = built;
+    const eye = camera.position;
+    for (const led of leds) ledDistance.set(led, Math.hypot(led.world[0] - eye.x, led.world[1] - eye.y, led.world[2] - eye.z));
+    const wanted = [...leds].sort((a, b) => ledDistance.get(a) - ledDistance.get(b)).slice(0, spots.length);
+    const wantedSet = new Set(wanted);
+    let changed = false;
+    const served = new Set();
+    for (const spot of spots) { if (spot.userData.led && wantedSet.has(spot.userData.led)) { served.add(spot.userData.led); spot.userData.target = 1; } else spot.userData.target = 0; }
+    for (const spot of spots) {
+      if (spot.userData.target === 0 && spot.userData.current < 0.02) {
+        const next = wanted.find(led => !served.has(led));
+        if (next) {
+          spot.userData.led = next; served.add(next); spot.userData.target = 1; spot.userData.current = 0;
+          spot.position.set(next.world[0], next.world[1], next.world[2]);
+          spot.target.position.set(next.world[0], next.world[1] - 3, next.world[2]);
+          spot.target.updateMatrixWorld();
+          spot.userData.halo?.position.set(next.world[0], next.world[1] - 0.06, next.world[2]);
+          changed = true;
+        }
+      }
+    }
+    for (const spot of spots) {
+      const k = 1 - Math.exp(-10 * dt);
+      spot.userData.current += (spot.userData.target - spot.userData.current) * k;
+      spot.color.setRGB(1, 0.90, 0.76);
+      spot.intensity = spot.userData.led ? spot.userData.current * tune.power : 0;
+      if (spot.userData.halo) { spot.userData.halo.color.copy(spot.color); spot.userData.halo.intensity = spot.intensity * tune.halo; }
+      spot.visible = true;
+    }
+    shadowPickTimer += dt;
+    if (shadowPickTimer > 0.5 || changed) {
+      shadowPickTimer = 0;
+      const candidates = spots.filter(s => s.userData.led && s.intensity > 0.01).sort((a, b) => ledDistance.get(a.userData.led) - ledDistance.get(b.userData.led));
+      const current = spots.filter(s => s.castShadow);
+      const desired = candidates.slice(0, RENDER.shadowSpots);
+      const farthestKept = current.length ? Math.max(...current.map(s => ledDistance.get(s.userData.led) ?? Infinity)) : Infinity;
+      const needSwap = current.length !== desired.length || desired.some(s => !s.castShadow && (ledDistance.get(s.userData.led) + 1.0) < farthestKept);
+      if (needSwap) {
+        const keep = new Set(desired);
+        for (const s of spots) if (s.castShadow !== keep.has(s)) { s.castShadow = keep.has(s); s.shadow.needsUpdate = true; }
+        changed = true;
+      }
+    }
+    // three.js lists shadow-casting spot lights first, so the mask slots follow that order.
+    const order = [...spots.filter(s => s.castShadow), ...spots.filter(s => !s.castShadow)];
+    order.forEach((s, idx) => { const led = s.userData.led; if (led) roomMask.setRoom(idx, led.boxes, led.yLo, led.yHi, s.castShadow); else roomMask.setRoom(idx, [], 0, 0); });
+    spots.forEach((s, i) => { roomMask.haloSlot[i] = order.indexOf(s); });
+    if (changed) { renderer.shadowMap.needsUpdate = true; sceneDirty = 3; }
+  }
+
   // ---------------------------------------------------------------- fixtures: target, use, outline (as tour.js)
   let focusFixture = null;
   function centreTarget(ndcX = 0, ndcY = 0) {
@@ -608,7 +700,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (mode === 'walk') stepPlayer(dt);
     else { if (flying) flying(time); applyOrbit(); }
     updateEnvironment(dt);
-    if (stepFixtures(dt)) { renderer.shadowMap.needsUpdate = true; world.sun.shadow.needsUpdate = true; sceneDirty = 3; }
+    if (stepFixtures(dt)) { renderer.shadowMap.needsUpdate = true; for (const s of built?.spots || []) if (s.castShadow) s.shadow.needsUpdate = true; world.sun.shadow.needsUpdate = true; sceneDirty = 3; }
+    updateLights(dt);
     const poseKey = `${camera.position.x.toFixed(3)}|${camera.position.y.toFixed(3)}|${camera.position.z.toFixed(3)}|${camera.rotation.x.toFixed(4)}|${camera.rotation.y.toFixed(4)}|${zoomLevel.toFixed(3)}`;
     if (poseKey !== lastPoseKey || tune.clock) sceneDirty = 3;
     lastPoseKey = poseKey;
@@ -617,7 +710,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     envFrame++;
     if (changing && (RENDER.lessOften || envFrame % 4 === 0)) {
       // Live environment map from the eye, one cube face per frame (mirror hidden).
-      const hidden = built && built.reflector.visible ? [built.reflector] : [];
+      const hidden = built ? [built.reflector, built.lens].filter(o => o.visible) : [];
       hidden.forEach(o => { o.visible = false; });
       envCamera.position.copy(camera.position);
       if (RENDER.lessOften) {
@@ -645,7 +738,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       r.visible = floorInView;
       if (!floorInView) r.userData.fresh = false;
       if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !r.userData.fresh) && (changing || !r.userData.fresh)) {
+        const lensShown = built.lens.visible; built.lens.visible = false;   // the lit discs stay out of the reflection
         r.userData.renderMirror.call(r, renderer, scene, camera, r.geometry, r.material, null);
+        built.lens.visible = lensShown;
         r.userData.fresh = true;
       }
     }
@@ -704,6 +799,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       body.dataset.tourMode = 'walk';
       stepPlayer(0.016);
       renderer.shadowMap.needsUpdate = true;
+      for (const s of built.spots) s.shadow.needsUpdate = true;
       world.sun.shadow.needsUpdate = true;
       showHint(WALK_HINT);
       try { Promise.resolve(tourCanvas.requestPointerLock?.({ unadjustedMovement: true })).catch(() => tourCanvas.requestPointerLock?.()); } catch (_) { /* touch */ }
@@ -742,6 +838,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   function applyTune() {
     mats.setGlass(tune.glass);
+    roomMask.scale.floor.value = tune.floor; roomMask.scale.wall.value = tune.wall;
     try { localStorage.setItem(TUNE_KEY, JSON.stringify(tune)); } catch (_) { /* no storage */ }
   }
   tunePanel.addEventListener('input', e => {
