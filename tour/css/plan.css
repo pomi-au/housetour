@@ -68,7 +68,7 @@ body[data-tour-mode="walk"] #plan-name { display: none; }
 #plan-load .plan-drop { margin-top: 10px; font-size: 12px; color: rgba(244, 242, 236, .6); }
 #plan-status { min-height: 1.2em; font-size: 12px; }
 #plan-status[data-error="true"] { color: #ff8a80; }
-#plan-load button[data-close] {
+#plan-load button[data-close], #plan-load button[data-clear] {
   border: 1px solid rgba(255, 255, 255, .25);
   border-radius: 6px;
   padding: 4px 10px;
@@ -77,6 +77,7 @@ body[data-tour-mode="walk"] #plan-name { display: none; }
   font: inherit;
   cursor: pointer;
 }
+#plan-load button[data-clear] { margin-left: 8px; }
 body[data-dragging="true"]::after {
   content: 'Drop the JSON file to load it';
   position: fixed;

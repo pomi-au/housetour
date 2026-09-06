@@ -32,9 +32,17 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 
 ## Plan model viewer
 
-`model.html` shows a building model JSON instead of the coded residence. It loads any file of schema `foma.005_01.slab-footing-model.v1`, or any JSON whose entries carry `mesh.vertices_m`, `mesh.triangle_indices` and a `material_key`. Choose the file in the panel, drop it on the page, or open `model.html?src=path/to/model.json`.
+`model.html` shows a building model from JSON files instead of the coded residence. Load the files of one job together or one at a time; each file is a layer and the layers share one centre:
 
-The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it; the walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. Materials come from the file's material family (concrete, timber, metal, glass, tile, brick, carpet, else paint) with roughness and metalness from the file. JSON x, y are plan metres with z up; the model is centred on the lawn with the slab top as the walking floor.
+| File | Schema | What is built |
+| --- | --- | --- |
+| Slab and footing `005_01` | `foma.005_01.slab-footing-model.v1` | Triangle meshes of the slab and the footing. The highest slab top is the walking floor. |
+| Wall envelopes `005_03` | `foma.005_03.wall-envelope-model.v1` | Triangle mesh of every wall segment; the material key comes from the enclosing wall leaf (face brick, common brick, steel frame). |
+| Roof envelope `005_02` | `foma.005_02.roof-envelope-model.v1` | Each underside surface is a plane over its outline, built as a 50 mm roof prism; every eave height line gets a fascia board. |
+
+Any other JSON whose entries carry `mesh.vertices_m`, `mesh.triangle_indices` and a `material_key` loads as well. Choose the files in the panel, drop them on the page, or open `model.html?src=slab.json,walls.json,roof.json`. The Load JSON button adds more layers; Clear model starts again.
+
+The page opens as a plan view and turns over into the isometric view. Drag to orbit, scroll to zoom, right-drag to pan. Click a floor to walk on it (the click looks through the roof and walls for the slab). The walking controls, lighting panel (`T`), daylight clock, floor reflection, procedural textures, lawn, streets, lamps and lot boundary are the tour's. There is no neighbourhood. Materials follow the file's material family (concrete, masonry, timber, steel, glass, tile, carpet, roof sheet, fascia, else paint) with roughness and metalness from the file. JSON x, y are plan metres with z up; the model is centred on the lawn.
 
 Source: `tour/js/plan.js`, bundled to `tour/js/plan.bundle.js`; styles in `tour/css/plan.css`. Sample files can sit in `models/` (not committed).
 

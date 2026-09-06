@@ -35881,7 +35881,11 @@ void main() {
       const metal = Number.isFinite(spec?.metalness) ? spec.metalness : null;
       const common2 = { side: DoubleSide };
       let m;
-      if (/glass|glazing/.test(family)) {
+      if (/roof_sheet|colorbond|roofing/.test(family)) {
+        m = surfaceMaterial({ ...common2, color: 6251624, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.6 });
+      } else if (/fascia|gutter/.test(family)) {
+        m = surfaceMaterial({ ...common2, color: 15921386, roughness: 0.5, metalness: 0, envMapIntensity: 0.35 });
+      } else if (/glass|glazing/.test(family)) {
         m = new MeshPhysicalMaterial({ ...common2, color: 16777215, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.14, depthWrite: false, envMapIntensity: 1.6, specularIntensity: 1 });
         m.userData.baseEnv = 1;
         m.envMapIntensity = tune.glass;
@@ -35917,20 +35921,61 @@ void main() {
     }
     function collectSolids(json) {
       const out = [];
-      const visit = (node, path) => {
+      const visit = (node, path, material) => {
         if (Array.isArray(node)) {
-          node.forEach((n) => visit(n, path));
+          node.forEach((n) => visit(n, path, material));
           return;
         }
         if (!node || typeof node !== "object") return;
+        const mat = node.material_key || material;
         const mesh = node.mesh;
         if (mesh && Array.isArray(mesh.vertices_m) && Array.isArray(mesh.triangle_indices)) {
-          out.push({ id: node.slab_id || node.footing_id || node.wall_id || node.component_id || node.id || path, list: path, material: node.material_key || "default", mesh, top: node.top_z_m, bottom: node.bottom_z_m });
+          out.push({ id: node.slab_id || node.footing_id || node.segment_id || node.wall_leaf_id || node.component_id || node.id || path, list: path, material: mat || "default", mesh, top: node.top_z_m, bottom: node.bottom_z_m });
           return;
         }
-        for (const [k, v] of Object.entries(node)) if (k !== "inputs" && k !== "material_library") visit(v, path ? `${path}.${k}` : k);
+        for (const [k, v] of Object.entries(node)) if (k !== "inputs" && k !== "material_library" && k !== "artifacts") visit(v, path ? `${path}.${k}` : k, mat);
       };
-      visit(json, "");
+      visit(json, "", null);
+      return out.concat(roofSolids(json));
+    }
+    function prismSolid(id, list, material, contour, zTop, zBot) {
+      const pts = contour.map(([x, y]) => new Vector2(x, y));
+      if (ShapeUtils.isClockWise(pts)) pts.reverse();
+      const tris = ShapeUtils.triangulateShape(pts, []);
+      const n = pts.length, vertices_m = [], triangle_indices = [];
+      for (const p of pts) vertices_m.push([p.x, p.y, zTop(p.x, p.y)]);
+      for (const p of pts) vertices_m.push([p.x, p.y, zBot(p.x, p.y)]);
+      for (const [a, b, c] of tris) {
+        triangle_indices.push([a, b, c]);
+        triangle_indices.push([n + a, n + c, n + b]);
+      }
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        triangle_indices.push([i, n + i, n + j]);
+        triangle_indices.push([i, n + j, j]);
+      }
+      return { id, list, material, mesh: { vertices_m, triangle_indices } };
+    }
+    const ROOF_SHEET = 0.05, FASCIA_DEPTH = 0.18, FASCIA_THICK = 0.03;
+    function roofSolids(json) {
+      const out = [];
+      for (const sf of json.roof_underside_envelope?.surfaces || []) {
+        const poly = sf.polygon_model_xy_m;
+        if (!Array.isArray(poly) || poly.length < 3 || !Array.isArray(sf.gradient_xy)) continue;
+        const [gx, gy] = sf.gradient_xy, c = Number(sf.intercept) || 0, nz = Number(sf.normal_z) || 1, thk = Number(sf.sheet_thickness_m) || 0;
+        const under = (x, y) => gx * x + gy * y + c - nz * thk;
+        out.push(prismSolid(sf.surface_id || "roof", "roof_underside_envelope.surfaces", "roof_sheet", poly, (x, y) => under(x, y) + ROOF_SHEET, under));
+      }
+      for (const e of json.eave_height_lines || []) {
+        const seg = e.segment_model_xyz_m;
+        if (!Array.isArray(seg) || seg.length !== 2) continue;
+        const [a, b] = seg, dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+        if (len < 1e-4) continue;
+        const nx = -dy / len * FASCIA_THICK / 2, ny = dx / len * FASCIA_THICK / 2;
+        const contour = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
+        const zAt = (x, y) => a[2] + (b[2] - a[2]) * ((x - a[0]) * dx + (y - a[1]) * dy) / (len * len);
+        out.push(prismSolid(e.eave_height_line_id || "eave", "eave_height_lines", "fascia", contour, (x, y) => zAt(x, y) + 0.02, (x, y) => zAt(x, y) - FASCIA_DEPTH));
+      }
       return out;
     }
     const world = {};
@@ -36074,9 +36119,12 @@ void main() {
       built.reflector.dispose?.();
       built = null;
     }
-    function buildModel(json, name) {
-      const solids = collectSolids(json);
-      if (!solids.length) throw new Error("No triangle mesh found in this file");
+    function buildModel(layers2) {
+      const solids = layers2.flatMap((l) => collectSolids(l.json).map((s) => ({ ...s, layer: l.name })));
+      if (!solids.length) throw new Error("No mesh, roof surface or eave line found");
+      const name = layers2.map((l) => l.name).join(" + ");
+      const materials = Object.assign({}, ...layers2.map((l) => l.json.materials || {}));
+      const usage = new Map(layers2.flatMap((l) => l.json.material_library?.materialUsage || []).map((u) => [u.materialKey, u]));
       disposeBuilt();
       let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
       for (const s of solids) for (const [x, y, z] of s.mesh.vertices_m) {
@@ -36093,8 +36141,6 @@ void main() {
       const groundY = (Number.isFinite(floorTop) ? floorTop : z1) - GROUND_BELOW_FLOOR;
       const root = new Group();
       const meshes = [], floorTris = [];
-      const materials = json.materials || {};
-      const usage = new Map((json.material_library?.materialUsage || []).map((u) => [u.materialKey, u]));
       let triangles = 0;
       for (const s of solids) {
         const V = s.mesh.vertices_m, T = s.mesh.triangle_indices;
@@ -36125,7 +36171,7 @@ void main() {
         const mesh = new Mesh(geo, materialFor(s.material, materials[s.material], usage.get(s.material)));
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        mesh.userData = { id: s.id, list: s.list, material: s.material };
+        mesh.userData = { id: s.id, list: s.list, material: s.material, layer: s.layer, floor: /slab/.test(s.list) || /slab/.test(s.material) };
         root.add(mesh);
         meshes.push(mesh);
       }
@@ -36203,6 +36249,7 @@ void main() {
       lastSunUpdate = -1;
       applyQuality();
       modelName.textContent = `${name} \xB7 ${solids.length} solids \xB7 ${triangles} triangles`;
+      document.title = `${layers2[0].name} \xB7 Plan model`;
       console.info(`[plan] model: ${solids.length} solids, ${triangles} triangles, floor at ${floorTop.toFixed(3)} m`);
       return built;
     }
@@ -36530,12 +36577,16 @@ void main() {
       raycaster.setFromCamera(ndc, camera);
       raycaster.near = 0;
       raycaster.far = 2e3;
+      raycaster.firstHitOnly = false;
       const hits = raycaster.intersectObjects(built.meshes, true);
-      if (!hits.length) return null;
-      const h = hits[0];
-      const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
-      if (Math.abs(n.y) < 0.7) return null;
-      return { x: h.point.x, y: h.point.y, z: h.point.z };
+      raycaster.firstHitOnly = true;
+      for (const h of hits) {
+        const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+        if (n.y < 0.7) continue;
+        if (!h.object.userData.floor && h.point.y > built.floorTop + 0.6) continue;
+        return { x: h.point.x, y: h.point.y, z: h.point.z };
+      }
+      return null;
     }
     async function enterWalk(point) {
       if (mode !== "overview" || entering || !built) return;
@@ -36793,21 +36844,26 @@ void main() {
       button.addEventListener("pointerleave", release);
       button.addEventListener("contextmenu", (e) => e.preventDefault());
     }
+    const layers = [];
     function setStatus(text, error = false) {
       loadStatus.textContent = text;
       loadStatus.dataset.error = error ? "true" : "false";
     }
-    async function loadJson(json, name) {
+    async function loadJson(json, name, { intro = true } = {}) {
       if (mode === "walk") exitWalk();
       loading2.dataset.active = "true";
       await new Promise((r) => setTimeout(r, 30));
+      const kept = layers.filter((l) => l.name !== name);
       try {
-        buildModel(json, name);
+        buildModel([...kept, { name, json }]);
+        layers.length = 0;
+        layers.push(...kept, { name, json });
         loadPanel.hidden = true;
         openButton.hidden = false;
-        document.title = `${name} \xB7 Plan model`;
+        setStatus(`Loaded: ${layers.map((l) => l.name).join(", ")}`);
         showHint(OVERVIEW_HINT);
-        overviewIntro();
+        if (intro) overviewIntro();
+        else fitOverview();
       } catch (err) {
         console.error("[plan] load failed", err);
         setStatus(`Cannot show ${name}: ${err.message}`, true);
@@ -36816,24 +36872,44 @@ void main() {
         loading2.dataset.active = "false";
       }
     }
-    function loadFile(file) {
-      if (!file) return;
-      setStatus(`Reading ${file.name}\u2026`);
-      file.text().then((text) => loadJson(JSON.parse(text), file.name)).catch((err) => setStatus(`Cannot read ${file.name}: ${err.message}`, true));
-    }
-    async function loadUrl(url) {
-      setStatus(`Loading ${url}\u2026`);
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        await loadJson(await res.json(), url.split("/").pop() || url);
-      } catch (err) {
-        setStatus(`Cannot load ${url}: ${err.message}`, true);
-        loadPanel.hidden = false;
+    async function loadFiles(files) {
+      let first = !built;
+      for (const file of files || []) {
+        setStatus(`Reading ${file.name}\u2026`);
+        try {
+          await loadJson(JSON.parse(await file.text()), file.name, { intro: first });
+          first = false;
+        } catch (err) {
+          setStatus(`Cannot read ${file.name}: ${err.message}`, true);
+        }
       }
     }
+    async function loadUrl(url) {
+      let first = !built;
+      for (const one of String(url).split(",").map((u) => u.trim()).filter(Boolean)) {
+        setStatus(`Loading ${one}\u2026`);
+        try {
+          const res = await fetch(one);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          await loadJson(await res.json(), one.split("/").pop() || one, { intro: first });
+          first = false;
+        } catch (err) {
+          setStatus(`Cannot load ${one}: ${err.message}`, true);
+          loadPanel.hidden = false;
+        }
+      }
+    }
+    function clearModel() {
+      if (mode === "walk") exitWalk();
+      layers.length = 0;
+      disposeBuilt();
+      modelName.textContent = "";
+      setStatus("");
+      openButton.hidden = true;
+      loadPanel.hidden = false;
+    }
     fileInput.addEventListener("change", () => {
-      loadFile(fileInput.files[0]);
+      loadFiles([...fileInput.files]);
       fileInput.value = "";
     });
     openButton.addEventListener("click", () => {
@@ -36842,6 +36918,7 @@ void main() {
     loadPanel.querySelector("[data-close]").addEventListener("click", () => {
       if (built) loadPanel.hidden = true;
     });
+    loadPanel.querySelector("[data-clear]").addEventListener("click", clearModel);
     window.addEventListener("dragover", (e) => {
       e.preventDefault();
       body.dataset.dragging = "true";
@@ -36852,7 +36929,7 @@ void main() {
     window.addEventListener("drop", (e) => {
       e.preventDefault();
       body.dataset.dragging = "false";
-      loadFile(e.dataTransfer.files[0]);
+      loadFiles([...e.dataTransfer.files]);
     });
     applyQuality();
     applyOrbit();
@@ -36861,7 +36938,7 @@ void main() {
     const src = new URLSearchParams(location.search).get("src");
     if (src) loadUrl(src);
     else setStatus("");
-    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
+    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, clear: clearModel, layers, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
       return mode;
     }, get player() {
       return player;

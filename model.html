@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#1c1e1d">
   <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
   <title>Plan Model Viewer</title>
-  <link rel="stylesheet" href="tour/css/tour.css?v=mtpyb7r0">
-  <link rel="stylesheet" href="tour/css/plan.css?v=mtpyb7r0">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtpyhdyl">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtpyhdyl">
 </head>
 <body data-tour-mode="overview">
   <!-- One three.js renderer draws both the bird's-eye overview and the walking view. -->
@@ -40,16 +40,17 @@
   <!-- Model loader: any JSON whose entries carry mesh.vertices_m and mesh.triangle_indices. -->
   <section id="plan-load" aria-label="Load a model">
     <h1>Plan model viewer</h1>
-    <p>Load a slab and footing model JSON (schema <code>foma.005_01.slab-footing-model.v1</code>). The model is shown from above; click its floor to walk on it.</p>
+    <p>Load the model JSON files of one job, together or one at a time: slab and footing (<code>005_01</code>), wall envelopes (<code>005_03</code>) and roof envelope (<code>005_02</code>). The model is shown from above; click a floor to walk on it.</p>
     <label class="plan-pick">
-      <input id="plan-file" type="file" accept=".json,application/json">
-      <span>Choose a JSON file</span>
+      <input id="plan-file" type="file" accept=".json,application/json" multiple>
+      <span>Choose JSON files</span>
     </label>
-    <p class="plan-drop">or drop the file anywhere on this page · or open <code>model.html?src=path/to/model.json</code></p>
+    <p class="plan-drop">or drop the files anywhere on this page · or open <code>model.html?src=slab.json,walls.json,roof.json</code></p>
     <p id="plan-status" data-error="false"></p>
     <button type="button" data-close>Close</button>
+    <button type="button" data-clear>Clear model</button>
   </section>
 
-  <script src="tour/js/plan.bundle.js?v=mtpyb7r0"></script>
+  <script src="tour/js/plan.bundle.js?v=mtpyhdyl"></script>
 </body>
 </html>
