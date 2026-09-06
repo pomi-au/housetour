@@ -37334,12 +37334,29 @@ void main() {
     const sharedY = (y) => y <= 0 ? R.PARAMS.GROUND_FLOOR_DATUM + (y - R.PARAMS.GROUND_FLOOR_DATUM) * STAIR_SCALE : y - UPPER_DROP;
     const itemY = (item, y) => item.level === "upper" ? y - UPPER_DROP : isStairItem(item) ? sharedY(y) : y;
     const FLOOR_CATEGORIES = /* @__PURE__ */ new Set(["floor", "finishFloor", "finishCarpet", "stair", "wet"]);
-    const RENDER = { dpr: 2, msaa: 2, reflection: 0.4, ao: false, sunShadow: 1024, shadowSpots: 8, shadowSize: 512, aoSamples: 8, lessOften: true };
-    const SPOT_POOL = Math.max(1, ...["upper", "ground"].map((level) => R.ceilingLEDs.filter((led) => led.state.level === level).length));
+    const TOUCH2 = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+    const RENDER = {
+      dpr: TOUCH2 ? 1 : 1.25,
+      msaa: 2,
+      reflection: 0.3,
+      reflectEvery: 2,
+      ao: false,
+      sunShadow: 1024,
+      shadowSpots: TOUCH2 ? 2 : 3,
+      shadowSize: 512,
+      aoSamples: 8,
+      lessOften: true,
+      lights: 8,
+      haloLights: false,
+      physical: false,
+      cell: 8,
+      cull: true,
+      direct: true
+    };
+    const SPOT_POOL = Math.min(RENDER.lights, Math.max(1, ...["upper", "ground"].map((level) => R.ceilingLEDs.filter((led) => led.state.level === level).length)));
     const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1, base: 1, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
     const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
     const IS_TOUCH_DEVICE = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
-    const SHADOW_COUNT = IS_TOUCH_DEVICE ? 2 : 4;
     const TUNE_KEY = "residence.tour.lighting.v1";
     const tune = { ...TUNE_DEFAULTS };
     try {
@@ -37450,7 +37467,18 @@ void main() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       if (composer) composer.dispose?.();
+      composer = null;
       const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
+      if (q.direct && !q.ao) {
+        if (built) {
+          built.sun.shadow.mapSize.set(q.sunShadow, q.sunShadow);
+          built.sun.shadow.map?.dispose();
+          built.sun.shadow.map = null;
+          built.reflector.getRenderTarget().setSize(Math.max(2, Math.round(w * q.reflection)), Math.max(2, Math.round(h * q.reflection)));
+          renderer.shadowMap.needsUpdate = true;
+        }
+        return;
+      }
       const target = new WebGLRenderTarget(w, h, { type: HalfFloatType, samples: renderer.capabilities.isWebGL2 ? q.msaa : 0 });
       composer = new EffectComposer(renderer, target);
       composer.setPixelRatio(dpr);
@@ -37650,6 +37678,13 @@ float roomMask(int i, vec3 vRoomPos) {
       albedoTextures[key] = t;
       return t;
     }
+    const PHYSICAL_ONLY = ["clearcoat", "clearcoatRoughness", "sheen", "sheenRoughness", "specularIntensity", "transmission", "thickness", "ior", "reflectivity"];
+    function surfaceMaterial(params) {
+      if (RENDER.physical) return new MeshPhysicalMaterial(params);
+      const p = { ...params };
+      for (const k of PHYSICAL_ONLY) delete p[k];
+      return new MeshStandardMaterial(p);
+    }
     function makeMaterial(type, alpha, atlas) {
       const common2 = { side: alpha >= 0.995 && !type.startsWith("glass") ? FrontSide : DoubleSide, vertexColors: true };
       let m;
@@ -37664,7 +37699,7 @@ float roomMask(int i, vec3 vRoomPos) {
           map.minFilter = LinearMipmapLinearFilter;
           map.magFilter = LinearFilter;
           map.wrapS = map.wrapT = ClampToEdgeWrapping;
-          m = new MeshPhysicalMaterial({
+          m = surfaceMaterial({
             ...common2,
             vertexColors: false,
             map,
@@ -37681,23 +37716,23 @@ float roomMask(int i, vec3 vRoomPos) {
           break;
         }
         case "floorPlain":
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 0.34, envMapIntensity: 0.35 });
+          m = surfaceMaterial({ ...common2, roughness: 0.34, envMapIntensity: 0.35 });
           break;
         case "carpet": {
           const bumpMap = reliefTexture("carpet", 512, [[2e4, 1.5, 120], [6e3, 3, 100], [2500, 6, 90], [600, 12, 70]]);
           bumpMap.repeat.set(3, 3);
           const map = albedoFromRelief(bumpMap, 240, 0.9);
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 1, metalness: 0, sheen: 0.6, sheenRoughness: 0.9, envMapIntensity: 0.25, map, bumpMap, bumpScale: 0.08 });
+          m = surfaceMaterial({ ...common2, roughness: 1, metalness: 0, sheen: 0.6, sheenRoughness: 0.9, envMapIntensity: 0.25, map, bumpMap, bumpScale: 0.08 });
           break;
         }
         case "render": {
           const bumpMap = reliefTexture("render", 512, [[9e3, 3, 120], [3e3, 6, 90], [800, 14, 60]]);
           const map = albedoFromRelief(bumpMap, 250, 0.4);
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 0.95, envMapIntensity: 0.3, map, bumpMap, bumpScale: 0.1 });
+          m = surfaceMaterial({ ...common2, roughness: 0.95, envMapIntensity: 0.3, map, bumpMap, bumpScale: 0.1 });
           break;
         }
         case "metal":
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 0.28, metalness: 0.92, envMapIntensity: 1.2 });
+          m = surfaceMaterial({ ...common2, roughness: 0.28, metalness: 0.92, envMapIntensity: 1.2 });
           break;
         case "glassClear":
           m = new MeshPhysicalMaterial({ ...common2, vertexColors: false, color: 16777215, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.14, depthWrite: false, envMapIntensity: 1.6, specularIntensity: 1 });
@@ -37717,13 +37752,13 @@ float roomMask(int i, vec3 vRoomPos) {
           m = new MeshPhysicalMaterial({ ...common2, vertexColors: false, color: 14672868, roughness: 0.55, metalness: 0, transparent: true, opacity: 0.8, depthWrite: false, envMapIntensity: 0.8 });
           break;
         case "smooth":
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 0.55, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.4 });
+          m = surfaceMaterial({ ...common2, roughness: 0.55, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.4 });
           break;
         case "trim":
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 0.5, clearcoat: 0.12, clearcoatRoughness: 0.4, envMapIntensity: 0.35 });
+          m = surfaceMaterial({ ...common2, roughness: 0.5, clearcoat: 0.12, clearcoatRoughness: 0.4, envMapIntensity: 0.35 });
           break;
         case "tile":
-          m = new MeshPhysicalMaterial({ ...common2, roughness: 0.18, envMapIntensity: 0.6 });
+          m = surfaceMaterial({ ...common2, roughness: 0.18, envMapIntensity: 0.6 });
           break;
         case "ceramic":
           m = new MeshPhysicalMaterial({ ...common2, roughness: 0.1, clearcoat: 0.9, clearcoatRoughness: 0.1, envMapIntensity: 0.9 });
@@ -37732,7 +37767,7 @@ float roomMask(int i, vec3 vRoomPos) {
           const bumpMap = reliefTexture("paint", 512, [[4e3, 10, 70], [12e3, 4, 60], [3e4, 1.5, 50]]);
           bumpMap.repeat.set(1.5, 1.5);
           const map = albedoFromRelief(bumpMap, 251, 0.12);
-          m = new MeshPhysicalMaterial({ ...common2, color: new Color(1.06, 1.06, 1.06), roughness: 0.86, metalness: 0, envMapIntensity: 0.4, map, bumpMap, bumpScale: 0.045 });
+          m = surfaceMaterial({ ...common2, color: new Color(1.06, 1.06, 1.06), roughness: 0.86, metalness: 0, envMapIntensity: 0.4, map, bumpMap, bumpScale: 0.045 });
         }
       }
       if (alpha < 0.995 && !m.transparent) {
@@ -37852,6 +37887,22 @@ float roomMask(int i, vec3 vRoomPos) {
       g.userData.height = 1.7;
       return g;
     }
+    const INTERIOR_CATEGORIES = /* @__PURE__ */ new Set(["internal", "wet", "finishFloor", "finishCarpet", "trim", "cornice", "door", "robe", "slider", "lighting"]);
+    let culledLevel = null;
+    function cullOtherLevel() {
+      if (!built) return;
+      const level = player.footY > -1 ? "upper" : "ground";
+      const v = built.stairVoid;
+      const nearStair = player.x > v[0] - 2.5 && player.x < v[1] + 2.5 && player.z > v[2] - 2.5 && player.z < v[3] + 2.5;
+      const hide = RENDER.cull && !nearStair ? level === "upper" ? "ground" : "upper" : null;
+      if (hide === culledLevel) return;
+      culledLevel = hide;
+      for (const m of built.staticColliders) if (m.userData.interior && (m.userData.level === "upper" || m.userData.level === "ground")) m.visible = m.userData.level !== hide;
+      renderer.shadowMap.needsUpdate = true;
+      for (const s of built.spots) if (s.castShadow) s.shadow.needsUpdate = true;
+      built.sun.shadow.needsUpdate = true;
+      sceneDirty = 3;
+    }
     function buildWalkScene() {
       for (const led of R.ceilingLEDs) led.walkWorld = [led.world[0], walkY(led.state.level, led.world[1]), led.world[2]];
       if (built) disposeBuilt();
@@ -37890,8 +37941,8 @@ float roomMask(int i, vec3 vRoomPos) {
         const a = alpha >= 0.995 ? 1 : Math.round(alpha * 20) / 20;
         let key = `${type}|${a}`;
         if (!item.transformWhen) {
-          const cx2 = Math.floor(item.lightCenter[0] / 4), cz2 = Math.floor(item.lightCenter[2] / 4);
-          key += `|cell${cx2}_${cz2}`;
+          const cx2 = Math.floor(item.lightCenter[0] / RENDER.cell), cz2 = Math.floor(item.lightCenter[2] / RENDER.cell);
+          key += `|cell${cx2}_${cz2}|${item.level}|${INTERIOR_CATEGORIES.has(item.category) ? "in" : "out"}`;
         }
         if (glow) {
           if (!glowSources.has(item.emissionWhen)) glowSources.set(item.emissionWhen, glowSources.size);
@@ -37972,6 +38023,8 @@ float roomMask(int i, vec3 vRoomPos) {
         mesh.castShadow = !b.type.startsWith("glass");
         mesh.receiveShadow = true;
         mesh.userData.bucket = key;
+        mesh.userData.level = b.items[0].level;
+        mesh.userData.interior = INTERIOR_CATEGORIES.has(b.items[0].category);
         if (b.type === "floorTex" || b.type === "floorPlain" || b.type === "tile") reflective.push(mesh);
         if (b.transform) {
           const g = dynamicGroups.get(b.transform);
@@ -38090,7 +38143,7 @@ float roomMask(int i, vec3 vRoomPos) {
       root.add(bezel, lens, trim);
       const spots = [];
       for (let i = 0; i < SPOT_POOL; i++) {
-        const light = new SpotLight(16777215, 0, 6.5, MathUtils.degToRad(55), 0.36, 2);
+        const light = RENDER.haloLights ? new SpotLight(16777215, 0, 6.5, MathUtils.degToRad(55), 0.36, 2) : new SpotLight(16777215, 0, 6.5, MathUtils.degToRad(64), 0.65, 2);
         light.target = new Object3D();
         light.castShadow = false;
         light.shadow.mapSize.set(RENDER.shadowSize, RENDER.shadowSize);
@@ -38099,10 +38152,11 @@ float roomMask(int i, vec3 vRoomPos) {
         light.shadow.normalBias = 0.03;
         light.shadow.camera.near = 0.1;
         light.shadow.radius = 4;
-        const halo = new PointLight(16777215, 0, 5, 2);
-        halo.castShadow = false;
+        const halo = RENDER.haloLights ? new PointLight(16777215, 0, 5, 2) : null;
+        if (halo) halo.castShadow = false;
         light.userData = { led: null, target: 0, current: 0, room: 0, halo };
-        root.add(light, light.target, halo);
+        root.add(light, light.target);
+        if (halo) root.add(halo);
         spots.push(light);
         const helper = new SpotLightHelper(light, 16762982);
         light.userData.helper = helper;
@@ -38387,7 +38441,8 @@ float roomMask(int i, vec3 vRoomPos) {
         }
       }
       scene.add(root);
-      built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+      culledLevel = null;
+      built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
       buildDirty = false;
       console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1e3)}k triangles, ${leds.length} downlights`);
     }
@@ -38551,7 +38606,7 @@ float roomMask(int i, vec3 vRoomPos) {
             spot.position.set(next.walkWorld[0], next.walkWorld[1], next.walkWorld[2]);
             spot.target.position.set(next.walkWorld[0], next.walkWorld[1] - 3, next.walkWorld[2]);
             spot.target.updateMatrixWorld();
-            spot.userData.halo.position.set(next.walkWorld[0], next.walkWorld[1] - 0.06, next.walkWorld[2]);
+            spot.userData.halo?.position.set(next.walkWorld[0], next.walkWorld[1] - 0.06, next.walkWorld[2]);
             changed = true;
           }
         }
@@ -38566,8 +38621,10 @@ float roomMask(int i, vec3 vRoomPos) {
         const warm = !led || led.state.temperature !== "cool";
         spot.color.setRGB(warm ? 1 : 0.86, warm ? 0.9 : 0.94, warm ? 0.76 : 1);
         spot.intensity = led ? spot.userData.current * room * tune.power : 0;
-        spot.userData.halo.color.copy(spot.color);
-        spot.userData.halo.intensity = spot.intensity * tune.halo;
+        if (spot.userData.halo) {
+          spot.userData.halo.color.copy(spot.color);
+          spot.userData.halo.intensity = spot.intensity * tune.halo;
+        }
         spot.visible = true;
         const helper = spot.userData.helper;
         helper.visible = showCones && spot.intensity > 1e-3;
@@ -38586,7 +38643,7 @@ float roomMask(int i, vec3 vRoomPos) {
         shadowPickTimer = 0;
         const candidates = spots.filter((s) => s.userData.led && s.intensity > 0.01).sort((a, b) => ledDistance.get(a.userData.led) - ledDistance.get(b.userData.led));
         const current = spots.filter((s) => s.castShadow);
-        const desired = candidates.slice(0, SHADOW_COUNT);
+        const desired = candidates.slice(0, RENDER.shadowSpots);
         const farthestKept = current.length ? Math.max(...current.map((s) => ledDistance.get(s.userData.led) ?? Infinity)) : Infinity;
         const needSwap = current.length !== desired.length || desired.some((s) => !s.castShadow && ledDistance.get(s.userData.led) + 1 < farthestKept);
         if (needSwap) {
@@ -38741,7 +38798,7 @@ float roomMask(int i, vec3 vRoomPos) {
       hemi.color.setRGB(0.42 * daylight + 0.05, 0.52 * daylight + 0.06, 0.72 * daylight + 0.12);
       hemi.groundColor.setRGB(0.3 * daylight + 0.02, 0.29 * daylight + 0.02, 0.26 * daylight + 0.03);
       sunShadowTimer += dt;
-      if (lastSunUpdate < 0 || sunShadowTimer >= 0.25 && Math.abs(h - lastSunUpdate) > 0.02) {
+      if (lastSunUpdate < 0 || sunShadowTimer >= 1 && Math.abs(h - lastSunUpdate) > 0.05) {
         sunShadowTimer = 0;
         lastSunUpdate = h;
         sun.shadow.needsUpdate = true;
@@ -38794,6 +38851,7 @@ float roomMask(int i, vec3 vRoomPos) {
         sceneDirty = 3;
       }
       placeSkeletonBehindMovingLeaf();
+      cullOtherLevel();
       updateLights(dt);
       const poseKey = `${player.x.toFixed(3)}|${player.footY.toFixed(3)}|${player.z.toFixed(3)}|${player.yaw.toFixed(4)}|${player.pitch.toFixed(4)}|${zoomLevel.toFixed(3)}`;
       if (poseKey !== lastPoseKey || tune.clock || moving) sceneDirty = 3;
@@ -38849,7 +38907,7 @@ float roomMask(int i, vec3 vRoomPos) {
         r.userData.fresh = true;
       };
       for (const r of allReflectors) if (!r.visible) r.userData.fresh = false;
-      if (floorInView) renderOnce(built.reflector);
+      if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !built.reflector.userData.fresh)) renderOnce(built.reflector);
       const vm = built.vanityMirror;
       if (vm) {
         const doors = vm.userData.doors;
@@ -38887,7 +38945,8 @@ float roomMask(int i, vec3 vRoomPos) {
       crosshair.dataset.target = focusAction ? "true" : "false";
       const label = describe(focusAction);
       if (targetLabel.textContent !== label) targetLabel.textContent = label;
-      composer.render(dt);
+      if (composer) composer.render(dt);
+      else renderer.render(scene, camera);
       frames++;
       fpsTime += dt;
       if (fpsTime >= 0.5) {
@@ -38977,7 +39036,8 @@ float roomMask(int i, vec3 vRoomPos) {
         for (const s of built.spots) s.shadow.needsUpdate = true;
         built.sun.shadow.needsUpdate = true;
         lastTime = performance.now();
-        composer.render(0.016);
+        if (composer) composer.render(0.016);
+        else renderer.render(scene, camera);
         renderer.setAnimationLoop(frame);
         showHint(WALK_HINT);
         try {

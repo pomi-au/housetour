@@ -28,11 +28,28 @@ A procedural skeleton (three.js primitives, no assets) waits inside the closets.
 
 The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and slides along walls.
 
+## Performance switches
+
+`RENDER` at the top of `tour/js/tour.js` holds the quality switches; `ResidenceTour.setQuality({...})` changes the ones that apply at run time and `ResidenceTour.benchmark(60, true)` returns milliseconds per frame.
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `dpr` | 1.25 (1 on touch) | Cap on the device pixel ratio. |
+| `lights` | 8 | Fixtures lit at once: the nearest ones. Needs a rebuild of the walk scene. |
+| `haloLights` | off | A point light under each fixture. Off uses a wider, softer cone instead. |
+| `shadowSpots` | 3 (2 on touch) | Fixtures with real shadow maps; the rest are confined by their room box. |
+| `reflection`, `reflectEvery` | 0.3, 2 | Floor reflection target scale and refresh interval in frames. |
+| `physical` | off | Physical shader for flat paints. Off uses the standard shader, same look. |
+| `cell` | 8 | Draw-bucket size in metres. |
+| `cull` | on | Hides the other level's interior fittings when the walker is away from the stair. |
+| `direct` | on | Draws straight to the canvas when ambient occlusion is off. The vignette is CSS. |
+| `lessOften` | on | Skips the environment map and reflections while nothing on screen changes. |
+
 ## Files
 
 | Path | Content |
 | --- | --- |
-| `tour.html` | Page markup only. |
+| `tour.html` | Page markup only. `index.html` at the root is an exact copy, written by the build stamp, for GitHub Pages. |
 | `tour/css/residence.css` | Original engine styles. |
 | `tour/css/tour.css` | Full-window layout, hides labels, walking HUD. |
 | `tour/js/residence-sound.js` | Procedural foley (door, window, water sounds). |
@@ -40,6 +57,10 @@ The walker stands 1.7 m above the floor, climbs stairs, falls with gravity, and 
 | `tour/js/tour.js` | Walking mode source (three.js). |
 | `tour/js/tour.bundle.js` | Built bundle of `tour.js` with three.js and three-mesh-bvh. |
 | `assets/` | Flooring, detail and installed-room images as plain files. |
+
+## Publish
+
+GitHub Pages serves the repository root from the `main` branch: https://pomi-au.github.io/housetour/. Push `main` to publish. Netlify (floorto3d.netlify.app) deploys with `npx netlify-cli deploy --prod --dir .`.
 
 ## Build
 

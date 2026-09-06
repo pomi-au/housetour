@@ -54,15 +54,21 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // Single render setting.
   // dpr: cap on the device pixel ratio (screens above 2 show no difference). lessOften: skip the environment
   // cube map and the reflector renders while nothing on screen changes, and spread the cube map one face per frame.
-  const RENDER = { dpr: 2, msaa: 2, reflection: 0.4, ao: false, sunShadow: 1024, shadowSpots: 8, shadowSize: 512, aoSamples: 8, lessOften: true };   // O toggles ambient occlusion
+  const TOUCH = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  // lights: fixtures lit at once (the nearest); haloLights: a point light under each fixture (off: wider cone
+  // instead); physical: MeshPhysicalMaterial for flat paints (off: the cheaper standard shader, same look);
+  // cell: draw-bucket size in metres; cull: hide the other level's interior away from the stair; direct: draw
+  // straight to the canvas when ambient occlusion is off (no post-processing pass); reflectEvery: floor
+  // reflection refresh interval in frames.
+  const RENDER = { dpr: TOUCH ? 1 : 1.25, msaa: 2, reflection: 0.3, reflectEvery: 2, ao: false, sunShadow: 1024, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, aoSamples: 8, lessOften: true,
+    lights: 8, haloLights: false, physical: false, cell: 8, cull: true, direct: true };   // O toggles ambient occlusion
   // Every fixture on the current level gets its own light, so nothing switches on or off while you walk a floor.
   // (The other level's fixtures sit behind its slab; the room mask keeps them out anyway.)
-  const SPOT_POOL = Math.max(1, ...['upper', 'ground'].map(level => R.ceilingLEDs.filter(led => led.state.level === level).length));
+  const SPOT_POOL = Math.min(RENDER.lights, Math.max(1, ...['upper', 'ground'].map(level => R.ceilingLEDs.filter(led => led.state.level === level).length)));
   // Lighting tuning (T opens the slider panel in walk mode; values persist in localStorage).
   const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1.0, base: 1.0, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
   const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;  // 0.1 simulated hour per 250 ms real time (2.5 s = 1 hour)
   const IS_TOUCH_DEVICE = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
-  const SHADOW_COUNT = IS_TOUCH_DEVICE ? 2 : 4;     // nearest fixtures rendered with shadow maps instead of a room box
   const TUNE_KEY = 'residence.tour.lighting.v1';
   const tune = { ...TUNE_DEFAULTS };
   try { Object.assign(tune, JSON.parse(localStorage.getItem(TUNE_KEY) || '{}')); } catch (_) { /* no storage */ }
@@ -180,7 +186,17 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     if (composer) composer.dispose?.();
+    composer = null;
     const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
+    if (q.direct && !q.ao) {
+      // Straight to the canvas: tone mapping and colour space happen in the materials, the vignette is CSS.
+      if (built) {
+        built.sun.shadow.mapSize.set(q.sunShadow, q.sunShadow); built.sun.shadow.map?.dispose(); built.sun.shadow.map = null;
+        built.reflector.getRenderTarget().setSize(Math.max(2, Math.round(w * q.reflection)), Math.max(2, Math.round(h * q.reflection)));
+        renderer.shadowMap.needsUpdate = true;
+      }
+      return;
+    }
     // HDR, multisampled scene target: MSAA plus the 2x pixel ratio stands in for the reference supersampling.
     const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: renderer.capabilities.isWebGL2 ? q.msaa : 0 });
     composer = new EffectComposer(renderer, target);
@@ -364,6 +380,14 @@ float roomMask(int i, vec3 vRoomPos) {
     return t;
   }
 
+  // Flat surfaces (paint, render, tile, trim, carpet, timber) need none of the physical layers: the standard shader
+  // draws them the same for less per-pixel work. RENDER.physical restores the physical shader for comparison.
+  const PHYSICAL_ONLY = ['clearcoat', 'clearcoatRoughness', 'sheen', 'sheenRoughness', 'specularIntensity', 'transmission', 'thickness', 'ior', 'reflectivity'];
+  function surfaceMaterial(params) {
+    if (RENDER.physical) return new THREE.MeshPhysicalMaterial(params);
+    const p = { ...params }; for (const k of PHYSICAL_ONLY) delete p[k];
+    return new THREE.MeshStandardMaterial(p);
+  }
   function makeMaterial(type, alpha, atlas) {
     // Opaque surfaces are single-sided (see the winding pass); glass and translucent screens stay two-sided.
     const common = { side: (alpha >= 0.995 && !type.startsWith('glass')) ? THREE.FrontSide : THREE.DoubleSide, vertexColors: true };
@@ -378,27 +402,27 @@ float roomMask(int i, vec3 vRoomPos) {
         map.generateMipmaps = true; map.minFilter = THREE.LinearMipmapLinearFilter; map.magFilter = THREE.LinearFilter;
         map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
         // Grain relief and per-texel roughness come from the photographed boards themselves.
-        m = new THREE.MeshPhysicalMaterial({ ...common, vertexColors: false, map, color: 0xffffff,
+        m = surfaceMaterial({ ...common, vertexColors: false, map, color: 0xffffff,
           bumpMap: map, bumpScale: timber ? 0.010 : 0.016,
           roughnessMap: map, roughness: timber ? 0.55 : 0.68,
           metalness: 0, clearcoat: 0, envMapIntensity: 0.35, reflectivity: 0.5 + finish.reflection });
         break;
       }
-      case 'floorPlain': m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.34, envMapIntensity: 0.35 }); break;
+      case 'floorPlain': m = surfaceMaterial({ ...common, roughness: 0.34, envMapIntensity: 0.35 }); break;
       case 'carpet': {
         const bumpMap = reliefTexture('carpet', 512, [[20000, 1.5, 120], [6000, 3, 100], [2500, 6, 90], [600, 12, 70]]);
         bumpMap.repeat.set(3, 3);   // world-metre UVs: tufts about 3 mm across
         const map = albedoFromRelief(bumpMap, 240, 0.9);
-        m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 1, metalness: 0, sheen: 0.6, sheenRoughness: 0.9, envMapIntensity: 0.25, map, bumpMap, bumpScale: 0.08 });
+        m = surfaceMaterial({ ...common, roughness: 1, metalness: 0, sheen: 0.6, sheenRoughness: 0.9, envMapIntensity: 0.25, map, bumpMap, bumpScale: 0.08 });
         break;
       }
       case 'render': {
         const bumpMap = reliefTexture('render', 512, [[9000, 3, 120], [3000, 6, 90], [800, 14, 60]]);
         const map = albedoFromRelief(bumpMap, 250, 0.4);
-        m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.95, envMapIntensity: 0.3, map, bumpMap, bumpScale: 0.10 });
+        m = surfaceMaterial({ ...common, roughness: 0.95, envMapIntensity: 0.3, map, bumpMap, bumpScale: 0.10 });
         break;
       }
-      case 'metal': m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.28, metalness: 0.92, envMapIntensity: 1.2 }); break;
+      case 'metal': m = surfaceMaterial({ ...common, roughness: 0.28, metalness: 0.92, envMapIntensity: 1.2 }); break;
       case 'glassClear': m = new THREE.MeshPhysicalMaterial({ ...common, vertexColors: false, color: 0xffffff, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.14, depthWrite: false, envMapIntensity: 1.6, specularIntensity: 1.0 }); break;
       case 'glassGrey': m = new THREE.MeshPhysicalMaterial({ ...common, vertexColors: false, color: 0x3a4248, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.55, depthWrite: false, envMapIntensity: 1.6, specularIntensity: 1.0 }); break;
       // Surfaces under a planar mirror carry no environment reflection: the mirror is the only reflection, so
@@ -406,15 +430,15 @@ float roomMask(int i, vec3 vRoomPos) {
       case 'glassMirror': m = new THREE.MeshPhysicalMaterial({ ...common, side: THREE.FrontSide, roughness: 0.12, metalness: 0, envMapIntensity: 0, specularIntensity: 1.0 }); break;
       case 'glassPane': m = new THREE.MeshPhysicalMaterial({ ...common, vertexColors: false, color: 0xe6edef, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.24, depthWrite: false, envMapIntensity: 0, specularIntensity: 1.0 }); break;
       case 'glassObscure': m = new THREE.MeshPhysicalMaterial({ ...common, vertexColors: false, color: 0xdfe3e4, roughness: 0.55, metalness: 0, transparent: true, opacity: 0.8, depthWrite: false, envMapIntensity: 0.8 }); break;
-      case 'smooth': m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.55, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.4 }); break;
-      case 'trim': m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.5, clearcoat: 0.12, clearcoatRoughness: 0.4, envMapIntensity: 0.35 }); break;
-      case 'tile': m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.18, envMapIntensity: 0.6 }); break;
+      case 'smooth': m = surfaceMaterial({ ...common, roughness: 0.55, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.4 }); break;
+      case 'trim': m = surfaceMaterial({ ...common, roughness: 0.5, clearcoat: 0.12, clearcoatRoughness: 0.4, envMapIntensity: 0.35 }); break;
+      case 'tile': m = surfaceMaterial({ ...common, roughness: 0.18, envMapIntensity: 0.6 }); break;
       case 'ceramic': m = new THREE.MeshPhysicalMaterial({ ...common, roughness: 0.1, clearcoat: 0.9, clearcoatRoughness: 0.1, envMapIntensity: 0.9 }); break;
       default: {
         const bumpMap = reliefTexture('paint', 512, [[4000, 10, 70], [12000, 4, 60], [30000, 1.5, 50]]);
         bumpMap.repeat.set(1.5, 1.5);   // soft plaster roll texture on painted walls
         const map = albedoFromRelief(bumpMap, 251, 0.12);   // soft grain, close to white
-        m = new THREE.MeshPhysicalMaterial({ ...common, color: new THREE.Color(1.06, 1.06, 1.06), roughness: 0.86, metalness: 0, envMapIntensity: 0.4, map, bumpMap, bumpScale: 0.045 });
+        m = surfaceMaterial({ ...common, color: new THREE.Color(1.06, 1.06, 1.06), roughness: 0.86, metalness: 0, envMapIntensity: 0.4, map, bumpMap, bumpScale: 0.045 });
       }
     }
     if (alpha < 0.995 && !m.transparent) { m.transparent = true; m.opacity = alpha; m.depthWrite = false; }
@@ -508,6 +532,22 @@ float roomMask(int i, vec3 vRoomPos) {
     return g;
   }
 
+  // Interior fittings of the level the walker is not on are hidden away from the stair void (RENDER.cull).
+  // Exterior walls, glazing, floors seen from outside and the stair stay.
+  const INTERIOR_CATEGORIES = new Set(['internal', 'wet', 'finishFloor', 'finishCarpet', 'trim', 'cornice', 'door', 'robe', 'slider', 'lighting']);
+  let culledLevel = null;
+  function cullOtherLevel() {
+    if (!built) return;
+    const level = player.footY > -1 ? 'upper' : 'ground';
+    const v = built.stairVoid;
+    const nearStair = player.x > v[0] - 2.5 && player.x < v[1] + 2.5 && player.z > v[2] - 2.5 && player.z < v[3] + 2.5;
+    const hide = (RENDER.cull && !nearStair) ? (level === 'upper' ? 'ground' : 'upper') : null;
+    if (hide === culledLevel) return;
+    culledLevel = hide;
+    for (const m of built.staticColliders) if (m.userData.interior && (m.userData.level === 'upper' || m.userData.level === 'ground')) m.visible = m.userData.level !== hide;
+    renderer.shadowMap.needsUpdate = true; for (const s of built.spots) if (s.castShadow) s.shadow.needsUpdate = true; built.sun.shadow.needsUpdate = true; sceneDirty = 3;
+  }
+
   function buildWalkScene() {
     for (const led of R.ceilingLEDs) led.walkWorld = [led.world[0], walkY(led.state.level, led.world[1]), led.world[2]];
     if (built) disposeBuilt();
@@ -546,8 +586,8 @@ float roomMask(int i, vec3 vRoomPos) {
       let key = `${type}|${a}`;
       if (!item.transformWhen) {
         // 4 m cells: frustum culling then drops walls behind the walker and rooms off screen.
-        const cx = Math.floor(item.lightCenter[0] / 4), cz = Math.floor(item.lightCenter[2] / 4);
-        key += `|cell${cx}_${cz}`;
+        const cx = Math.floor(item.lightCenter[0] / RENDER.cell), cz = Math.floor(item.lightCenter[2] / RENDER.cell);
+        key += `|cell${cx}_${cz}|${item.level}|${INTERIOR_CATEGORIES.has(item.category) ? 'in' : 'out'}`;
       }
       if (glow) { if (!glowSources.has(item.emissionWhen)) glowSources.set(item.emissionWhen, glowSources.size); key += `|glow${glowSources.get(item.emissionWhen)}`; }
       if (item.transformWhen) {
@@ -626,6 +666,7 @@ float roomMask(int i, vec3 vRoomPos) {
       mesh.castShadow = !b.type.startsWith('glass');
       mesh.receiveShadow = true;
       mesh.userData.bucket = key;
+      mesh.userData.level = b.items[0].level; mesh.userData.interior = INTERIOR_CATEGORIES.has(b.items[0].category);
       if (b.type === 'floorTex' || b.type === 'floorPlain' || b.type === 'tile') reflective.push(mesh);
       if (b.transform) {
         const g = dynamicGroups.get(b.transform);
@@ -737,7 +778,9 @@ float roomMask(int i, vec3 vRoomPos) {
     const spots = [];
     for (let i = 0; i < SPOT_POOL; i++) {
       // Recessed downlight: a wide soft cone aimed at the floor, with a shadow map so it stays in its room.
-      const light = new THREE.SpotLight(0xffffff, 0, 6.5, THREE.MathUtils.degToRad(55), 0.36, 2.0);
+      const light = RENDER.haloLights
+        ? new THREE.SpotLight(0xffffff, 0, 6.5, THREE.MathUtils.degToRad(55), 0.36, 2.0)
+        : new THREE.SpotLight(0xffffff, 0, 6.5, THREE.MathUtils.degToRad(64), 0.65, 2.0);   // wider, softer cone stands in for the halo
       light.target = new THREE.Object3D();
       // Hybrid confinement: the nearest fixtures cast real shadow maps (light through doorways, object shadows),
       // the rest are confined by their room box. Which fixtures cast is chosen in updateLights.
@@ -748,10 +791,10 @@ float roomMask(int i, vec3 vRoomPos) {
       light.shadow.radius = 4;
       // Secondary soft halo: a wide, dim point light just below the fixture so the ceiling and nearby walls
       // pick up a gentle spherical falloff around each downlight (the cone alone leaves them flat).
-      const halo = new THREE.PointLight(0xffffff, 0, 5.0, 2.0);
-      halo.castShadow = false;
+      const halo = RENDER.haloLights ? new THREE.PointLight(0xffffff, 0, 5.0, 2.0) : null;
+      if (halo) halo.castShadow = false;
       light.userData = { led: null, target: 0, current: 0, room: 0, halo };
-      root.add(light, light.target, halo); spots.push(light);
+      root.add(light, light.target); if (halo) root.add(halo); spots.push(light);
       // Cone outline for this downlight.
       const helper = new THREE.SpotLightHelper(light, 0xffc866);
       light.userData.helper = helper;
@@ -1031,7 +1074,8 @@ float roomMask(int i, vec3 vRoomPos) {
     }
 
     scene.add(root);
-    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
+    culledLevel = null;
+    built = { root, materials, reflective, staticColliders, dynamicNodes, switches, switchModels, ledOn, ledOff, glowMaterials, mirrorState, mirrorLight, vanityMirror, robeMirrors, closetSpots, skeleton, stairVoid, clock, sky, moon, houseCenter, daylight: 1, spots, sun, hemi, ambient, reflector, mirrorGeometries, mirrorY, lens, leds, triangles, atlas };
     buildDirty = false;
     console.info(`[tour] walk scene: ${buckets.size} draw buckets, ${dynamicNodes.length} moving assemblies, ${Math.round(triangles / 1000)}k triangles, ${leds.length} downlights`);
   }
@@ -1165,7 +1209,7 @@ float roomMask(int i, vec3 vRoomPos) {
           spot.position.set(next.walkWorld[0], next.walkWorld[1], next.walkWorld[2]);
           spot.target.position.set(next.walkWorld[0], next.walkWorld[1] - 3, next.walkWorld[2]);
           spot.target.updateMatrixWorld();
-          spot.userData.halo.position.set(next.walkWorld[0], next.walkWorld[1] - 0.06, next.walkWorld[2]);
+          spot.userData.halo?.position.set(next.walkWorld[0], next.walkWorld[1] - 0.06, next.walkWorld[2]);
           changed = true;
         }
       }
@@ -1180,8 +1224,7 @@ float roomMask(int i, vec3 vRoomPos) {
       const warm = !led || led.state.temperature !== 'cool';
       spot.color.setRGB(warm ? 1 : 0.86, warm ? 0.90 : 0.94, warm ? 0.76 : 1);
       spot.intensity = led ? spot.userData.current * room * tune.power : 0;
-      spot.userData.halo.color.copy(spot.color);
-      spot.userData.halo.intensity = spot.intensity * tune.halo;
+      if (spot.userData.halo) { spot.userData.halo.color.copy(spot.color); spot.userData.halo.intensity = spot.intensity * tune.halo; }
       // Lights stay visible even at zero intensity: an invisible light gets no shadow map render, and with
       // on-demand shadow updates its map would stay empty and read as fully shadowed once it fades in.
       spot.visible = true;
@@ -1204,7 +1247,7 @@ float roomMask(int i, vec3 vRoomPos) {
       shadowPickTimer = 0;
       const candidates = spots.filter(s => s.userData.led && s.intensity > 0.01).sort((a, b) => ledDistance.get(a.userData.led) - ledDistance.get(b.userData.led));
       const current = spots.filter(s => s.castShadow);
-      const desired = candidates.slice(0, SHADOW_COUNT);
+      const desired = candidates.slice(0, RENDER.shadowSpots);
       const farthestKept = current.length ? Math.max(...current.map(s => ledDistance.get(s.userData.led) ?? Infinity)) : Infinity;
       const needSwap = current.length !== desired.length || desired.some(s => !s.castShadow && (ledDistance.get(s.userData.led) + 1.0) < farthestKept);
       if (needSwap) {
@@ -1345,7 +1388,7 @@ float roomMask(int i, vec3 vRoomPos) {
     // Sun shadows move with the sun: refresh only its map, at most 4 times a second, and only once the sun
     // has moved (a stopped clock means no refresh at all).
     sunShadowTimer += dt;
-    if (lastSunUpdate < 0 || (sunShadowTimer >= 0.25 && Math.abs(h - lastSunUpdate) > 0.02)) {
+    if (lastSunUpdate < 0 || (sunShadowTimer >= 1.0 && Math.abs(h - lastSunUpdate) > 0.05)) {
       sunShadowTimer = 0; lastSunUpdate = h; sun.shadow.needsUpdate = true; renderer.shadowMap.needsUpdate = true;
     }
   }
@@ -1395,6 +1438,7 @@ float roomMask(int i, vec3 vRoomPos) {
     }
     if (moving) { renderer.shadowMap.needsUpdate = true; for (const s of built.spots) if (s.castShadow) s.shadow.needsUpdate = true; built.sun.shadow.needsUpdate = true; sceneDirty = 3; }
     placeSkeletonBehindMovingLeaf();
+    cullOtherLevel();
     updateLights(dt);
     // Does anything on screen change this frame? A still walker, closed doors, stopped clock and unchanged lights
     // mean the environment map and every reflection are already right: skip re-rendering them.
@@ -1446,7 +1490,7 @@ float roomMask(int i, vec3 vRoomPos) {
       r.userData.fresh = true;
     };
     for (const r of allReflectors) if (!r.visible) r.userData.fresh = false;
-    if (floorInView) renderOnce(built.reflector);
+    if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !built.reflector.userData.fresh)) renderOnce(built.reflector);
     const vm = built.vanityMirror;
     if (vm) {
       const doors = vm.userData.doors;
@@ -1484,7 +1528,7 @@ float roomMask(int i, vec3 vRoomPos) {
     crosshair.dataset.target = focusAction ? 'true' : 'false';
     const label = describe(focusAction);
     if (targetLabel.textContent !== label) targetLabel.textContent = label;
-    composer.render(dt);
+    if (composer) composer.render(dt); else renderer.render(scene, camera);   // direct: no post-processing pass
     frames++; fpsTime += dt;
     if (fpsTime >= 0.5) { fps = Math.round(frames / fpsTime); frames = 0; fpsTime = 0;
       if (tuningOpen && tune.clock) syncTunePanel();
@@ -1558,7 +1602,7 @@ float roomMask(int i, vec3 vRoomPos) {
       for (const s of built.spots) s.shadow.needsUpdate = true;
       built.sun.shadow.needsUpdate = true;
       lastTime = performance.now();
-      composer.render(0.016);
+      if (composer) composer.render(0.016); else renderer.render(scene, camera);
       renderer.setAnimationLoop(frame);
       showHint(WALK_HINT);
       try { Promise.resolve(tourCanvas.requestPointerLock?.({ unadjustedMovement: true })).catch(() => tourCanvas.requestPointerLock?.()); } catch (_) { /* touch devices */ }

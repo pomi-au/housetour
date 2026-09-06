@@ -59,6 +59,15 @@ body[data-tour-mode="walk"] #scene { visibility: hidden; }
 }
 #tour-fade[data-active="true"] { opacity: 1; }
 
+/* Vignette for the direct render path (no post-processing pass). */
+body[data-tour-mode="walk"] #tour-hud::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, .32) 100%);
+  pointer-events: none;
+}
+
 #tour-hud {
   position: fixed;
   inset: 0;
