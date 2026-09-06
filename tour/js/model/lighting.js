@@ -174,6 +174,7 @@ export function planDownlights(json, options = {}) {
     // Lights per rectangle.
     const spacing = Math.min(o.spacingMax, Math.max(o.spacingMin, r.ceiling));
     const roomLights = [];
+    const grown = q => [q.x0 - 0.3, q.y0 - 0.3, q.x1 + 0.3, q.y1 + 0.3];
     for (const q of r.rects) {
       const w = q.x1 - q.x0, d = q.y1 - q.y0;
       const spots = [];
@@ -201,14 +202,15 @@ export function planDownlights(json, options = {}) {
         }
         const [px, py] = ok ? centre(i, j) : [sx, sy];
         if (roomLights.some(l => Math.hypot(l.x - px, l.y - py) < o.mergeDistance)) continue;
-        roomLights.push({ x: px, y: py });
+        // Mask boxes for this light: its own rectangle and the room's largest one (two boxes, as the tour's mask).
+        roomLights.push({ x: px, y: py, boxes: q === r.rects[0] ? [grown(q), r.rects[1] ? grown(r.rects[1]) : null].filter(Boolean) : [grown(q), grown(r.rects[0])] });
       }
     }
     // Ceiling at each light: the roof plane there for a raked room, else the flat ceiling.
     for (const l of roomLights) {
       const [i, j] = toCell(l.x, l.y);
       const z = r.raked ? Math.min(roofZ[idx(i, j)] - 0.15, 4.0) : r.ceiling;
-      lights.push({ x: l.x, y: l.y, z, room: r.index });
+      lights.push({ x: l.x, y: l.y, z, room: r.index, boxes: l.boxes });
     }
     r.lights = roomLights.length;
     if (roomLights.length > o.maxPerRoom) console.warn(`[lighting] ${r.id}: ${roomLights.length} lights over ${r.area.toFixed(1)} m2`);

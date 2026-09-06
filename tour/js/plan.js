@@ -267,7 +267,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
     const leds = lighting.lights.map(l => ({
       world: [l.x - frame.cx, l.z + floorTop, -(l.y - frame.cy)], room: lighting.rooms[l.room],
-      boxes: lighting.rooms[l.room].boxes.map(b => [b[0] - frame.cx, -(b[3] - frame.cy), b[2] - frame.cx, -(b[1] - frame.cy)]),
+      boxes: l.boxes.map(b => [b[0] - frame.cx, -(b[3] - frame.cy), b[2] - frame.cx, -(b[1] - frame.cy)]),
       yLo: floorTop - 0.45, yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
     }));
     const fittings = buildDownlightFixtures(lighting.lights.map(l => ({ ...l, z: l.z + floorTop })), frame);
@@ -359,7 +359,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(root);
     root.updateMatrixWorld(true);
     const box = new THREE.Box3(new THREE.Vector3(-hx, z0, -hz), new THREE.Vector3(hx, z1, hz));
-    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens };
+    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings };
     lastSunUpdate = -1;
     applyQuality();
     const doors = fixtures.filter(g => g.userData.fixture.kind === 'hinged door').length;
@@ -1008,5 +1008,5 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const src = new URLSearchParams(location.search).get('src');
   if (src) loadUrl(src); else setStatus('');
 
-  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
+  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
 })();

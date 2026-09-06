@@ -36265,6 +36265,7 @@ void main() {
       r.boxes = r.rects.slice(0, 2).map((q) => [q.x0 - 0.3, q.y0 - 0.3, q.x1 + 0.3, q.y1 + 0.3]);
       const spacing = Math.min(o.spacingMax, Math.max(o.spacingMin, r.ceiling));
       const roomLights = [];
+      const grown = (q) => [q.x0 - 0.3, q.y0 - 0.3, q.x1 + 0.3, q.y1 + 0.3];
       for (const q of r.rects) {
         const w = q.x1 - q.x0, d = q.y1 - q.y0;
         const spots = [];
@@ -36296,13 +36297,13 @@ void main() {
           }
           const [px2, py2] = ok ? centre(i, j) : [sx, sy];
           if (roomLights.some((l) => Math.hypot(l.x - px2, l.y - py2) < o.mergeDistance)) continue;
-          roomLights.push({ x: px2, y: py2 });
+          roomLights.push({ x: px2, y: py2, boxes: q === r.rects[0] ? [grown(q), r.rects[1] ? grown(r.rects[1]) : null].filter(Boolean) : [grown(q), grown(r.rects[0])] });
         }
       }
       for (const l of roomLights) {
         const [i, j] = toCell(l.x, l.y);
         const z = r.raked ? Math.min(roofZ[idx(i, j)] - 0.15, 4) : r.ceiling;
-        lights.push({ x: l.x, y: l.y, z, room: r.index });
+        lights.push({ x: l.x, y: l.y, z, room: r.index, boxes: l.boxes });
       }
       r.lights = roomLights.length;
       if (roomLights.length > o.maxPerRoom) console.warn(`[lighting] ${r.id}: ${roomLights.length} lights over ${r.area.toFixed(1)} m2`);
@@ -36623,6 +36624,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const leafGroup = (x, z) => {
       const g = new Group();
       g.position.set(x, f.bar, z);
+      group.add(g);
       add(g, box(panelW, f.leafBar, f.leafDepth, 0, f.leafBar / 2, 0, materials.frame));
       add(g, box(panelW, f.leafBar, f.leafDepth, 0, panelH - f.leafBar / 2, 0, materials.frame));
       add(g, box(f.leafBar, panelH, f.leafDepth, -panelW / 2 + f.leafBar / 2, panelH / 2, 0, materials.frame));
@@ -36978,7 +36980,7 @@ float roomMask(int i, vec3 vRoomPos) {
       const leds = lighting.lights.map((l) => ({
         world: [l.x - frame2.cx, l.z + floorTop, -(l.y - frame2.cy)],
         room: lighting.rooms[l.room],
-        boxes: lighting.rooms[l.room].boxes.map((b) => [b[0] - frame2.cx, -(b[3] - frame2.cy), b[2] - frame2.cx, -(b[1] - frame2.cy)]),
+        boxes: l.boxes.map((b) => [b[0] - frame2.cx, -(b[3] - frame2.cy), b[2] - frame2.cx, -(b[1] - frame2.cy)]),
         yLo: floorTop - 0.45,
         yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
       }));
@@ -37075,7 +37077,7 @@ float roomMask(int i, vec3 vRoomPos) {
       scene.add(root);
       root.updateMatrixWorld(true);
       const box2 = new Box3(new Vector3(-hx, z0, -hz), new Vector3(hx, z1, hz));
-      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens };
+      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings };
       lastSunUpdate = -1;
       applyQuality();
       const doors = fixtures.filter((g) => g.userData.fixture.kind === "hinged door").length;
@@ -37951,7 +37953,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const src = new URLSearchParams(location.search).get("src");
     if (src) loadUrl(src);
     else setStatus("");
-    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
+    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, benchmark, setQuality, RENDER, THREE: three_module_exports, get mode() {
       return mode;
     }, get player() {
       return player;

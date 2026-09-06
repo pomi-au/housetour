@@ -24,7 +24,7 @@ export function createSlidingDoor({ width = 1.8, height = 2.1, depth = 0.23, pos
   const panels = Math.max(2, Math.ceil((w - 0.1) / 1.5));
   const inner = w - 2 * f.bar, panelW = inner / panels + 0.03, panelH = h - 2 * f.bar;
   const leafGroup = (x, z) => {
-    const g = new THREE.Group(); g.position.set(x, f.bar, z);
+    const g = new THREE.Group(); g.position.set(x, f.bar, z); group.add(g);
     add(g, box(panelW, f.leafBar, f.leafDepth, 0, f.leafBar / 2, 0, materials.frame));
     add(g, box(panelW, f.leafBar, f.leafDepth, 0, panelH - f.leafBar / 2, 0, materials.frame));
     add(g, box(f.leafBar, panelH, f.leafDepth, -panelW / 2 + f.leafBar / 2, panelH / 2, 0, materials.frame));
