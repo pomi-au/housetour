@@ -125,6 +125,7 @@ export function createMaterials({ renderer, physical = false, glassStrength = 2.
     glass: finishes.glass(),
     sill: surfaceMaterial({ color: 0xe8e4dc, roughness: 0.6, metalness: 0, envMapIntensity: 0.35 }),
     paint: surfaceMaterial({ vertexColors: true, roughness: 0.55, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.4 }),
+    leaf: surfaceMaterial({ color: 0xf4f2ee, roughness: 0.35, metalness: 0, envMapIntensity: 0 }),
     metal: surfaceMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.92, envMapIntensity: 1.2 })
   };
 

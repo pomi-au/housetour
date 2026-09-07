@@ -35800,6 +35800,7 @@ void main() {
       glass: finishes.glass(),
       sill: surfaceMaterial({ color: 15262940, roughness: 0.6, metalness: 0, envMapIntensity: 0.35 }),
       paint: surfaceMaterial({ vertexColors: true, roughness: 0.55, metalness: 0, clearcoat: 0.08, clearcoatRoughness: 0.5, envMapIntensity: 0.4 }),
+      leaf: surfaceMaterial({ color: 16052974, roughness: 0.35, metalness: 0, envMapIntensity: 0 }),
       metal: surfaceMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.92, envMapIntensity: 1.2 })
     };
     function grassTexture() {
@@ -36881,7 +36882,7 @@ float roomMask(int i, vec3 vRoomPos) {
 
   // ../js/fixtures/sliding-door.js
   var SLIDER_FRAME = { bar: 0.05, depth: 0.1, leafBar: 0.045, leafDepth: 0.035, glass: 6e-3 };
-  function createSlidingDoor({ width = 1.8, height = 2.1, depth = 0.23, position = [0, 0, 0], rotationDeg = 0, materials = defaultMaterials(), slide = "L", duration = 1.2, label = "" } = {}) {
+  function createSlidingDoor({ width = 1.8, height = 2.1, depth = 0.23, position = [0, 0, 0], rotationDeg = 0, materials = defaultMaterials(), slide = "L", duration = 1.2, label = "", panel = "glass", mirrorSide = 1, mirrorAlpha = 0.25 } = {}) {
     const group = placeFixture(new Group(), position, rotationDeg);
     const f = SLIDER_FRAME, w = width, h = height, d = Math.min(f.depth, depth);
     const meshes = [];
@@ -36896,10 +36897,32 @@ float roomMask(int i, vec3 vRoomPos) {
     add(group, box(f.bar, h - 2 * f.bar, d, w / 2 - f.bar / 2, h / 2, 0, materials.frame));
     const panels = Math.max(2, Math.ceil((w - 0.1) / 1.5));
     const inner = w - 2 * f.bar, panelW = inner / panels + 0.03, panelH = h - 2 * f.bar;
+    const mirrors = [];
     const leafGroup = (x, z) => {
       const g = new Group();
       g.position.set(x, f.bar, z);
       group.add(g);
+      if (panel === "mirror") {
+        add(g, box(panelW, panelH, f.leafDepth, 0, panelH / 2, 0, materials.leaf || materials.sill));
+        add(g, box(panelW, 0.02, f.leafDepth + 4e-3, 0, 0.01, 0, materials.frame));
+        add(g, box(panelW, 0.02, f.leafDepth + 4e-3, 0, panelH - 0.01, 0, materials.frame));
+        add(g, box(0.02, panelH, f.leafDepth + 4e-3, -panelW / 2 + 0.01, panelH / 2, 0, materials.frame));
+        add(g, box(0.02, panelH, f.leafDepth + 4e-3, panelW / 2 - 0.01, panelH / 2, 0, materials.frame));
+        const mirror = new Reflector(new PlaneGeometry(panelW - 0.05, panelH - 0.05), { textureWidth: 512, textureHeight: 512, clipBias: 3e-3, color: 14212318 });
+        mirror.material.fragmentShader = mirror.material.fragmentShader.replace(/,\s*1\.0\s*\);/, `, ${mirrorAlpha.toFixed(2)} );`);
+        mirror.material.transparent = true;
+        mirror.material.depthWrite = false;
+        mirror.renderOrder = 2;
+        mirror.position.set(0, panelH / 2, mirrorSide * (f.leafDepth / 2 + 15e-4));
+        if (mirrorSide < 0) mirror.rotation.y = Math.PI;
+        mirror.userData.renderMirror = mirror.onBeforeRender;
+        mirror.onBeforeRender = () => {
+        };
+        mirror.userData.fresh = false;
+        g.add(mirror);
+        mirrors.push(mirror);
+        return g;
+      }
       add(g, box(panelW, f.leafBar, f.leafDepth, 0, f.leafBar / 2, 0, materials.frame));
       add(g, box(panelW, f.leafBar, f.leafDepth, 0, panelH - f.leafBar / 2, 0, materials.frame));
       add(g, box(f.leafBar, panelH, f.leafDepth, -panelW / 2 + f.leafBar / 2, panelH / 2, 0, materials.frame));
@@ -36924,6 +36947,8 @@ float roomMask(int i, vec3 vRoomPos) {
       height,
       meshes,
       leaf: moving,
+      mirrors,
+      panel,
       get open() {
         return m.open;
       },
@@ -37323,13 +37348,25 @@ float roomMask(int i, vec3 vRoomPos) {
         }
       }
       for (const line of json.guides?.eave_height_lines || []) place(buildFascia(line, mats.finishes.fascia(), frame2), meshes);
+      const lighting = planDownlights(json);
       for (const o of openings) {
         const position = [o.cx - frame2.cx, floorTop + o.z0, -(o.cy - frame2.cy)];
         const height = o.z1 - o.z0;
         let g2 = null;
         if (o.hinged) g2 = createHingedDoor({ model: doorModel, width: o.width, hinge: o.hinge, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
-        else if (/sliding/.test(o.kind)) g2 = createSlidingDoor({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
-        else if (/window|glass/.test(o.kind)) g2 = createWindow({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+        else if (/sliding/.test(o.kind)) {
+          const w = o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0;
+          const inside = (side) => {
+            const gg = lighting.grid;
+            if (!gg) return false;
+            const dAcross = (o.depth || 0.23) / 2 + 0.9;
+            const px2 = o.cx + (o.alongX ? 0 : side * dAcross), py2 = o.cy + (o.alongX ? side * dAcross : 0);
+            const i = Math.floor((px2 - gg.x0) / gg.cell), j = Math.floor((py2 - gg.y0) / gg.cell);
+            return i >= 0 && j >= 0 && i < gg.W && j < gg.H && gg.state[j * gg.W + i] !== 0;
+          };
+          const internal = /internal|robe|wardrobe/i.test(o.label) || w < 3 && !/stacker/i.test(o.label) && inside(-1) && inside(1);
+          g2 = createSlidingDoor({ width: w, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label, panel: internal ? "mirror" : "glass", mirrorSide: 1 });
+        } else if (/window|glass/.test(o.kind)) g2 = createWindow({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
         if (!g2) {
           if (/window|sliding|glass/.test(o.kind)) place(buildGlazing(o, mats.fixtures.glass, frame2), meshes);
           continue;
@@ -37339,7 +37376,6 @@ float roomMask(int i, vec3 vRoomPos) {
         fixtures.push(g2);
         fixtureMeshes.push(...g2.userData.fixture.meshes);
       }
-      const lighting = planDownlights(json);
       const ceilingMaterial = mats.finishes.ceiling();
       for (const r of lighting.rooms) {
         if (r.raked) continue;
@@ -37365,7 +37401,7 @@ float roomMask(int i, vec3 vRoomPos) {
       const confined = [];
       for (const fx of fixtures) {
         const f = fx.userData.fixture;
-        if (f.kind !== "hinged door") continue;
+        if (f.kind !== "hinged door" && !(f.kind === "sliding door" && f.panel === "mirror")) continue;
         fx.updateMatrixWorld(true);
         for (const side of [-1, 1]) {
           const p = fx.localToWorld(new Vector3(0, 0.5, side * ((f.depth || 0.23) / 2 + 0.2)));
@@ -37373,6 +37409,10 @@ float roomMask(int i, vec3 vRoomPos) {
           if (space) {
             f.smallSpace = { space, side };
             confined.push({ door: f.label, space: space.id, volume: +space.volume.toFixed(2) });
+            for (const mr of f.mirrors || []) {
+              mr.position.z = -side * Math.abs(mr.position.z);
+              mr.rotation.y = side < 0 ? 0 : Math.PI;
+            }
             break;
           }
         }
@@ -37474,7 +37514,8 @@ float roomMask(int i, vec3 vRoomPos) {
       scene.add(root);
       root.updateMatrixWorld(true);
       const box2 = new Box3(new Vector3(-hx, z0, -hz), new Vector3(hx, z1, hz));
-      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings, baked: null, skeleton, skeletonDoor: null, skeletonPop: null, confined };
+      const mirrors = fixtures.flatMap((fx) => fx.userData.fixture.mirrors || []);
+      built = { root, meshes, fixtures, fixtureMeshes, reflector, mirrors, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings, baked: null, skeleton, skeletonDoor: null, skeletonPop: null, confined };
       if (mappedLights) setMappedLights(true);
       lastSunUpdate = -1;
       applyQuality();
@@ -37931,6 +37972,7 @@ float roomMask(int i, vec3 vRoomPos) {
       renderer.render(outlineScene, outlineCamera);
       renderer.autoClear = prevAuto;
     }
+    const viewFrustum = new Frustum(), viewMatrix = new Matrix4();
     let lastTime = 0, frames = 0, fpsTime = 0, fps = 0;
     let lastPoseKey = "", sceneDirty = 3;
     function frame(time) {
@@ -37956,7 +37998,7 @@ float roomMask(int i, vec3 vRoomPos) {
       if (sceneDirty > 0) sceneDirty--;
       envFrame++;
       if (changing && (RENDER.lessOften || envFrame % 4 === 0)) {
-        const hidden = built ? [built.reflector, built.lens].filter((o) => o.visible) : [];
+        const hidden = built ? [built.reflector, built.lens, ...built.mirrors].filter((o) => o.visible) : [];
         hidden.forEach((o) => {
           o.visible = false;
         });
@@ -37983,17 +38025,41 @@ float roomMask(int i, vec3 vRoomPos) {
         });
         scene.environment = envTarget.texture;
       }
-      if (built && built.reflector.geometry.attributes.position.count > 3) {
+      if (built) {
+        const allReflectors = [built.reflector, ...built.mirrors];
+        const renderOnce = (r2) => {
+          if (!changing && r2.userData.fresh) return;
+          const others = [...allReflectors.filter((o) => o !== r2), built.lens].filter((o) => o.visible);
+          others.forEach((o) => {
+            o.visible = false;
+          });
+          r2.userData.renderMirror.call(r2, renderer, scene, camera, r2.geometry, r2.material, null);
+          others.forEach((o) => {
+            o.visible = true;
+          });
+          r2.userData.fresh = true;
+        };
         const r = built.reflector;
-        const floorInView = mode !== "walk" || player.pitch < 0.42;
+        const floorInView = built.reflector.geometry.attributes.position.count > 3 && (mode !== "walk" || player.pitch < 0.42);
         r.visible = floorInView;
         if (!floorInView) r.userData.fresh = false;
-        if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !r.userData.fresh) && (changing || !r.userData.fresh)) {
-          const lensShown = built.lens.visible;
-          built.lens.visible = false;
-          r.userData.renderMirror.call(r, renderer, scene, camera, r.geometry, r.material, null);
-          built.lens.visible = lensShown;
-          r.userData.fresh = true;
+        if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !r.userData.fresh)) renderOnce(r);
+        let mirrorIndex = 0;
+        for (const rm of built.mirrors) {
+          rm.updateWorldMatrix(true, false);
+          const pos = new Vector3().setFromMatrixPosition(rm.matrixWorld);
+          const dist = camera.position.distanceTo(pos);
+          let show = mode === "walk" && dist < 6;
+          if (show) {
+            camera.updateMatrixWorld();
+            viewFrustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+            rm.geometry.computeBoundingSphere?.();
+            show = viewFrustum.intersectsObject(rm);
+          }
+          rm.visible = show;
+          if (!show) rm.userData.fresh = false;
+          else if (dist < 2.5 || (envFrame + mirrorIndex) % 2 === 0) renderOnce(rm);
+          mirrorIndex++;
         }
       }
       if (mode === "walk") {

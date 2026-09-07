@@ -246,13 +246,21 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       }
     }
     for (const line of json.guides?.eave_height_lines || []) place(buildFascia(line, mats.finishes.fascia(), frame), meshes);
+    const lighting = planDownlights(json);
     // Fixtures (fixtures/*.js): each opening gets its module by kind, placed at the opening centre at sill level.
     for (const o of openings) {
       const position = [o.cx - frame.cx, floorTop + o.z0, -(o.cy - frame.cy)];
       const height = o.z1 - o.z0;
       let g = null;
       if (o.hinged) g = createHingedDoor({ model: doorModel, width: o.width, hinge: o.hinge, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
-      else if (/sliding/.test(o.kind)) g = createSlidingDoor({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+      else if (/sliding/.test(o.kind)) {
+        // A robe slider (internal, not a stacker) gets solid mirrored leaves; a patio slider stays glazed.
+        const w = o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0;
+        // Inside means not open ground 0.9 m beyond the face: a room or a wall (a shallow robe's back) both count.
+        const inside = side => { const gg = lighting.grid; if (!gg) return false; const dAcross = (o.depth || 0.23) / 2 + 0.9; const px = o.cx + (o.alongX ? 0 : side * dAcross), py = o.cy + (o.alongX ? side * dAcross : 0); const i = Math.floor((px - gg.x0) / gg.cell), j = Math.floor((py - gg.y0) / gg.cell); return i >= 0 && j >= 0 && i < gg.W && j < gg.H && gg.state[j * gg.W + i] !== 0; };
+        const internal = /internal|robe|wardrobe/i.test(o.label) || (w < 3 && !/stacker/i.test(o.label) && inside(-1) && inside(1));
+        g = createSlidingDoor({ width: w, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label, panel: internal ? 'mirror' : 'glass', mirrorSide: 1 });
+      }
       else if (/window|glass/.test(o.kind)) g = createWindow({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
       if (!g) { if (/window|sliding|glass/.test(o.kind)) place(buildGlazing(o, mats.fixtures.glass, frame), meshes); continue; }
       g.userData.fixture.id = o.id;
@@ -261,7 +269,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
     // Downlights (model/lighting.js): rooms from the walls and roof, a flat ceiling per room, a fitting per light and
     // the tour's pooled spot lights with halos, confined to their room by the mask.
-    const lighting = planDownlights(json);
     const ceilingMaterial = mats.finishes.ceiling();
     for (const r of lighting.rooms) {
       if (r.raked) continue;   // the roof underside is the ceiling
@@ -278,12 +285,17 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const confined = [];
     for (const fx of fixtures) {
       const f = fx.userData.fixture;
-      if (f.kind !== 'hinged door') continue;
+      if (f.kind !== 'hinged door' && !(f.kind === 'sliding door' && f.panel === 'mirror')) continue;
       fx.updateMatrixWorld(true);
       for (const side of [-1, 1]) {
         const p = fx.localToWorld(new THREE.Vector3(0, 0.5, side * ((f.depth || 0.23) / 2 + 0.2)));
         const space = spaceAt(p.x, p.z);
-        if (space) { f.smallSpace = { space, side }; confined.push({ door: f.label, space: space.id, volume: +space.volume.toFixed(2) }); break; }
+        if (space) {
+          f.smallSpace = { space, side }; confined.push({ door: f.label, space: space.id, volume: +space.volume.toFixed(2) });
+          // A robe's mirrors face the room, away from the robe.
+          for (const mr of f.mirrors || []) { mr.position.z = -side * Math.abs(mr.position.z); mr.rotation.y = side < 0 ? 0 : Math.PI; }
+          break;
+        }
       }
     }
     if (confined.length) console.info('[plan] doors into small spaces (skeleton at or under ' + confinedVolume + ' m3):', confined);
@@ -379,7 +391,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(root);
     root.updateMatrixWorld(true);
     const box = new THREE.Box3(new THREE.Vector3(-hx, z0, -hz), new THREE.Vector3(hx, z1, hz));
-    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings, baked: null, skeleton, skeletonDoor: null, skeletonPop: null, confined };
+    const mirrors = fixtures.flatMap(fx => fx.userData.fixture.mirrors || []);
+    built = { root, meshes, fixtures, fixtureMeshes, reflector, mirrors, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings, baked: null, skeleton, skeletonDoor: null, skeletonPop: null, confined };
     if (mappedLights) setMappedLights(true);
     lastSunUpdate = -1;
     applyQuality();
@@ -749,6 +762,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     renderer.autoClear = prevAuto;
   }
 
+  const viewFrustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4();
   // ---------------------------------------------------------------- frame loop
   let lastTime = 0, frames = 0, fpsTime = 0, fps = 0;
   let lastPoseKey = '', sceneDirty = 3;
@@ -768,7 +782,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     envFrame++;
     if (changing && (RENDER.lessOften || envFrame % 4 === 0)) {
       // Live environment map from the eye, one cube face per frame (mirror hidden).
-      const hidden = built ? [built.reflector, built.lens].filter(o => o.visible) : [];
+      const hidden = built ? [built.reflector, built.lens, ...built.mirrors].filter(o => o.visible) : [];
       hidden.forEach(o => { o.visible = false; });
       envCamera.position.copy(camera.position);
       if (RENDER.lessOften) {
@@ -789,17 +803,41 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       hidden.forEach(o => { o.visible = true; });
       scene.environment = envTarget.texture;
     }
-    if (built && built.reflector.geometry.attributes.position.count > 3) {
-      // Floor reflection: one bounce, skipped while the floor is out of view (looking up).
+    if (built) {
+      // Reflections: one bounce only. While any reflector renders, every other reflector and the lit lens discs
+      // are hidden, so the picture shows the plain surfaces beneath them and no mirror-in-mirror.
+      const allReflectors = [built.reflector, ...built.mirrors];
+      const renderOnce = r => {
+        if (!changing && r.userData.fresh) return;
+        const others = [...allReflectors.filter(o => o !== r), built.lens].filter(o => o.visible);
+        others.forEach(o => { o.visible = false; });
+        r.userData.renderMirror.call(r, renderer, scene, camera, r.geometry, r.material, null);
+        others.forEach(o => { o.visible = true; });
+        r.userData.fresh = true;
+      };
+      // Floor reflection, skipped while the floor is out of view (looking up).
       const r = built.reflector;
-      const floorInView = mode !== 'walk' || player.pitch < 0.42;
+      const floorInView = built.reflector.geometry.attributes.position.count > 3 && (mode !== 'walk' || player.pitch < 0.42);
       r.visible = floorInView;
       if (!floorInView) r.userData.fresh = false;
-      if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !r.userData.fresh) && (changing || !r.userData.fresh)) {
-        const lensShown = built.lens.visible; built.lens.visible = false;   // the lit discs stay out of the reflection
-        r.userData.renderMirror.call(r, renderer, scene, camera, r.geometry, r.material, null);
-        built.lens.visible = lensShown;
-        r.userData.fresh = true;
+      if (floorInView && (envFrame % RENDER.reflectEvery === 0 || !r.userData.fresh)) renderOnce(r);
+      // Robe mirrors: each is a full scene re-render, so only the ones close by and on screen are refreshed.
+      let mirrorIndex = 0;
+      for (const rm of built.mirrors) {
+        rm.updateWorldMatrix(true, false);
+        const pos = new THREE.Vector3().setFromMatrixPosition(rm.matrixWorld);
+        const dist = camera.position.distanceTo(pos);
+        let show = mode === 'walk' && dist < 6;
+        if (show) {
+          camera.updateMatrixWorld();
+          viewFrustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+          rm.geometry.computeBoundingSphere?.();
+          show = viewFrustum.intersectsObject(rm);
+        }
+        rm.visible = show;
+        if (!show) rm.userData.fresh = false;
+        else if (dist < 2.5 || (envFrame + mirrorIndex) % 2 === 0) renderOnce(rm);
+        mirrorIndex++;
       }
     }
     if (mode === 'walk') { focusFixture = centreTarget(); crosshair.dataset.target = focusFixture ? 'true' : 'false'; updateOutline(focusFixture); }
