@@ -97,7 +97,7 @@ Sample files can sit in `models/` (not committed).
 
 ## Publish
 
-GitHub Pages serves the repository root from the `main` branch: https://pomi-au.github.io/housetour/. Push `main` to publish. Netlify (floorto3d.netlify.app) deploys with `npx netlify-cli deploy --prod --dir .`.
+GitHub Pages serves the repository root from the `main` branch: https://pomi-au.github.io/housetour/. Push `main` to publish. The viewer is at https://pomi-au.github.io/housetour/model.html; the sample models load with `?src=models/10024_house.json` or `?src=models/carabeen16_house.json`.
 
 ## Build
 
