@@ -67,7 +67,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   body.dataset.touch = TOUCH ? 'true' : 'false';
   const OVERVIEW_HINT = TOUCH ? 'Tap the floor to walk on it · drag to orbit · pinch to zoom' : 'Click the floor to walk on it · drag to orbit · scroll to zoom · right-drag to pan';
-  const WALK_HINT = TOUCH ? 'Drag to look · pinch to zoom · tap doors · buttons walk' : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · mouse look · click doors · <kbd>T</kbd> lighting · <kbd>Esc</kbd> exit';
+  const WALK_HINT = TOUCH ? 'Stick walks · drag to look · pinch to zoom · Use opens doors' : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · mouse look · click doors · <kbd>T</kbd> lighting · <kbd>Esc</kbd> exit';
 
   let mode = 'overview';
   let hintTimer = 0;
@@ -450,6 +450,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   // ---------------------------------------------------------------- player (as tour.js)
   const player = { x: 0, z: 0, footY: 0, eyeY: 0, yaw: 0, pitch: 0, vx: 0, vz: 0, vy: 0, grounded: true, bob: 0, speed: 0 };
+  const stick = { x: 0, y: 0, active: false };   // touch stick vector, -1..1
   const keys = new Set();
   const raycaster = new THREE.Raycaster();
   raycaster.firstHitOnly = true;
@@ -480,17 +481,19 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     return hit ? hit.point.y : null;
   }
   function stepPlayer(dt) {
-    const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-    const strafe = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    // Keys give unit steps; the touch stick gives an analog vector (x strafe, y forward) with deflection as speed.
+    const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + stick.y;
+    const strafe = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + stick.x;
     const run = keys.has('ShiftLeft') || keys.has('ShiftRight');
     if (forward || strafe) zoomTarget = 1;
     zoomLevel += (zoomTarget - zoomLevel) * Math.min(1, dt * 10);
     const fov = BASE_FOV / zoomLevel;
     if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
-    const speed = run ? RUN_SPEED : WALK_SPEED;
     let tx = 0, tz = 0;
     if (forward || strafe) {
       const len = Math.hypot(forward, strafe);
+      // Full deflection walks; the outer 15 % of the stick runs. Keys walk, Shift runs.
+      const mag = Math.min(1, len), speed = (run || (stick.active && len > 0.85) ? RUN_SPEED : WALK_SPEED) * (stick.active ? mag : 1);
       const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
       tx = ((-sy * forward) + (cy * strafe)) / len * speed;
       tz = ((-cy * forward) - (sy * strafe)) / len * speed;
@@ -840,7 +843,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         mirrorIndex++;
       }
     }
-    if (mode === 'walk') { focusFixture = centreTarget(); crosshair.dataset.target = focusFixture ? 'true' : 'false'; updateOutline(focusFixture); }
+    if (mode === 'walk') { focusFixture = centreTarget(); crosshair.dataset.target = focusFixture ? 'true' : 'false'; useButton.dataset.target = focusFixture ? 'true' : 'false'; updateOutline(focusFixture); }
     else if (focusFixture) { focusFixture = null; updateOutline(null); }
     renderer.render(scene, camera);
     drawOutline();
@@ -910,7 +913,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mode = 'overview';
     setTuning(false);
     if (document.pointerLockElement === tourCanvas) document.exitPointerLock();
-    keys.clear();
+    keys.clear(); releaseStick();
     focusFixture = null; updateOutline(null); crosshair.dataset.target = 'false';
     body.dataset.tourMode = 'overview';
     const eyePose = { yaw: player.yaw, pitch: -player.pitch, distance: 0.12, target: new THREE.Vector3(player.x, player.footY + EYE_HEIGHT, player.z) };
@@ -949,7 +952,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function setTuning(open) {
     tuningOpen = open;
     tunePanel.hidden = !open;
-    if (open) { keys.clear(); for (const b of mobileBar.querySelectorAll('button')) b.dataset.active = 'false'; }
+    if (open) { keys.clear(); releaseStick(); }
     if (open) { syncTunePanel(); if (document.pointerLockElement === tourCanvas) document.exitPointerLock(); }
   }
   syncTunePanel(); applyTune();
@@ -1054,20 +1057,34 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   };
   tourCanvas.addEventListener('pointerup', endPointer);
   tourCanvas.addEventListener('pointercancel', endPointer);
-  const mobileBar = document.getElementById('tour-mobile');
-  for (const button of mobileBar.querySelectorAll('button')) {
-    const move = button.dataset.move;
-    const code = move === 'forward' ? 'KeyW' : 'KeyS';
-    const pressKey = e => { e.preventDefault(); if (move && !tuningOpen) { keys.add(code); button.dataset.active = 'true'; } };
-    const release = () => { if (move) { keys.delete(code); button.dataset.active = 'false'; } };
-    button.addEventListener('pointerdown', pressKey);
-    button.addEventListener('pointerup', release);
-    button.addEventListener('pointercancel', release);
-    button.addEventListener('pointerleave', release);
-    button.addEventListener('contextmenu', e => e.preventDefault());
-    if (button.dataset.settings !== undefined) { button.addEventListener('click', () => setTuning(!tuningOpen)); continue; }
-    if (!move) button.addEventListener('click', () => { if (!tuningOpen) activateFixture(focusFixture); });
-  }
+  // Touch controls: analog stick (bottom left), Use (bottom right), settings and exit (top right).
+  const stickEl = document.getElementById('tour-stick'), knob = stickEl.querySelector('.stick-knob');
+  const useButton = document.getElementById('tour-use');
+  let stickPointer = null, stickCentre = null;
+  function releaseStick() { stick.x = stick.y = 0; stick.active = false; stickPointer = null; stickEl.dataset.active = 'false'; knob.style.transform = ''; }
+  stickEl.addEventListener('pointerdown', e => {
+    if (tuningOpen || stickPointer !== null) return;
+    const r = stickEl.getBoundingClientRect();
+    stickCentre = { x: r.left + r.width / 2, y: r.top + r.height / 2, radius: r.width / 2 - 20 };
+    stickPointer = e.pointerId; stick.active = true; stickEl.dataset.active = 'true';
+    stickEl.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  });
+  stickEl.addEventListener('pointermove', e => {
+    if (e.pointerId !== stickPointer) return;
+    let dx = e.clientX - stickCentre.x, dy = e.clientY - stickCentre.y;
+    const len = Math.hypot(dx, dy), max = stickCentre.radius;
+    if (len > max) { dx *= max / len; dy *= max / len; }
+    stick.x = dx / max; stick.y = -dy / max;   // up on the pad is forward
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    zoomTarget = 1;
+    e.preventDefault();
+  });
+  for (const type of ['pointerup', 'pointercancel']) stickEl.addEventListener(type, e => { if (e.pointerId === stickPointer) releaseStick(); });
+  stickEl.addEventListener('contextmenu', e => e.preventDefault());
+  useButton.addEventListener('pointerdown', e => { e.preventDefault(); if (!tuningOpen) activateFixture(focusFixture); });
+  useButton.addEventListener('contextmenu', e => e.preventDefault());
+  document.getElementById('tour-settings').addEventListener('click', () => { if (mode === 'walk') setTuning(!tuningOpen); });
 
   // ---------------------------------------------------------------- loading
   function setStatus(text, error = false) { loadStatus.textContent = text; loadStatus.dataset.error = error ? 'true' : 'false'; }

@@ -9,7 +9,98 @@ body[data-tour-mode="walk"] #tour-scene { cursor: none; }
 
 #tour-tune .tune-buttons { display: flex; gap: 8px; }
 #tour-tune button[data-close] { border-color: #ffc866; color: #ffc866; }
-#tour-mobile button[data-settings] { font-size: 24px; }
+/* Top bar: settings and exit. Top centre on a desktop, top right on a touch device. */
+#tour-topbar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  gap: 8px;
+  pointer-events: auto;
+}
+body[data-tour-mode="walk"] #tour-topbar { display: flex; }
+body[data-touch="true"] #tour-topbar { left: auto; right: max(16px, calc(env(safe-area-inset-right) + 16px)); top: max(16px, calc(env(safe-area-inset-top) + 16px)); transform: none; }
+#tour-topbar #tour-exit { position: static; transform: none; display: block; }
+#tour-settings {
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 999px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: rgba(20, 22, 21, .6);
+  color: #f4f2ec;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+#tour-settings:hover { background: rgba(20, 22, 21, .85); }
+body[data-touch="true"] #tour-settings, body[data-touch="true"] #tour-topbar #tour-exit { height: 48px; min-width: 48px; font-size: 15px; }
+body[data-touch="true"] #tour-settings { font-size: 24px; }
+
+/* Analog stick, bottom left: the knob follows the finger inside the base; deflection sets direction and speed. */
+#tour-stick {
+  position: absolute;
+  left: max(24px, calc(env(safe-area-inset-left) + 24px));
+  bottom: max(28px, calc(env(safe-area-inset-bottom) + 28px));
+  width: 150px;
+  height: 150px;
+  display: none;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+body[data-touch="true"][data-tour-mode="walk"] #tour-stick { display: block; }
+#tour-stick .stick-base {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(20, 22, 21, .45);
+  border: 1px solid rgba(255, 255, 255, .25);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+#tour-stick .stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 62px;
+  height: 62px;
+  margin: -31px 0 0 -31px;
+  border-radius: 50%;
+  background: rgba(244, 242, 236, .85);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+  transition: transform .08s linear;
+}
+#tour-stick[data-active="true"] .stick-knob { background: rgba(255, 200, 102, .95); transition: none; }
+
+/* Use, bottom right. */
+#tour-use {
+  position: absolute;
+  right: max(24px, calc(env(safe-area-inset-right) + 24px));
+  bottom: max(40px, calc(env(safe-area-inset-bottom) + 40px));
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(20, 22, 21, .62);
+  color: #f4f2ec;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  display: none;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+body[data-touch="true"][data-tour-mode="walk"] #tour-use { display: block; }
+#tour-use[data-target="true"] { background: rgba(255, 200, 102, .8); color: #1c1e1d; }
+#tour-use:active { background: rgba(255, 200, 102, .95); color: #1c1e1d; }
+body[data-touch="true"] #tour-hint { bottom: max(12px, calc(env(safe-area-inset-bottom) + 12px)); font-size: 12px; }
 body[data-touch="true"] #tour-tune { max-height: calc(100dvh - 80px); overflow-y: auto; }
 
 #plan-open {
@@ -96,3 +187,4 @@ body[data-dragging="true"]::after {
   font-size: 18px;
   pointer-events: none;
 }
+body[data-touch="true"][data-tour-mode="walk"] #tour-stats { top: max(72px, calc(env(safe-area-inset-top) + 72px)); }
