@@ -20,6 +20,7 @@ import { planDownlights, createRoomMask, buildDownlightFixtures, bakeLightMaps }
 import { extractStandardDoor, createHingedDoor, openingFor as doorOpeningFor } from './fixtures/hinged-door.js';
 import { createWindow } from './fixtures/window.js';
 import { createSlidingDoor } from './fixtures/sliding-door.js';
+import { createSkeleton, popIn } from './fixtures/skeleton.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -38,6 +39,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const RENDER = { dpr: TOUCH ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, haloLights: true };
   const SPOT_POOL = RENDER.lights;   // pooled downlights; the nearest fixtures take a slot, the rest wait
   const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1.0, base: 1.0, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
+  let confinedVolume = 1.0;   // m3: a door into a space this small or smaller has a skeleton behind it
   let mappedLights = true;    // the walk renders from baked light maps (direct plus bounce light); L switches to the run-time spot pool
   const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
   const TUNE_KEY = 'residence.tour.lighting.v1';   // shared with tour.html, so both pages show the same light
@@ -270,6 +272,24 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       boxes: l.boxes.map(b => [b[0] - frame.cx, -(b[3] - frame.cy), b[2] - frame.cx, -(b[1] - frame.cy)]),
       yLo: floorTop - 0.45, yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
     }));
+    // Confined spaces: a hinged door with a small region (CONFINED_VOLUME or less) on one side gets the skeleton.
+    const g = lighting.grid;
+    const spaceAt = (wx, wz) => { if (!g) return null; const px = wx + frame.cx, py = -wz + frame.cy; const i = Math.floor((px - g.x0) / g.cell), j = Math.floor((py - g.y0) / g.cell); if (i < 0 || j < 0 || i >= g.W || j >= g.H) return null; const n = g.smallAt[j * g.W + i]; return n >= 0 ? lighting.small[n] : null; };
+    const confined = [];
+    for (const fx of fixtures) {
+      const f = fx.userData.fixture;
+      if (f.kind !== 'hinged door') continue;
+      fx.updateMatrixWorld(true);
+      for (const side of [-1, 1]) {
+        const p = fx.localToWorld(new THREE.Vector3(0, 0.5, side * ((f.depth || 0.23) / 2 + 0.2)));
+        const space = spaceAt(p.x, p.z);
+        if (space) { f.smallSpace = { space, side }; confined.push({ door: f.label, space: space.id, volume: +space.volume.toFixed(2) }); break; }
+      }
+    }
+    if (confined.length) console.info('[plan] doors into small spaces (skeleton at or under ' + confinedVolume + ' m3):', confined);
+    const skeleton = createSkeleton();
+    skeleton.visible = false;
+    root.add(skeleton);
     const fittings = buildDownlightFixtures(lighting.lights.map(l => ({ ...l, z: l.z + floorTop })), frame);
     root.add(fittings.bezel, fittings.lens, fittings.trim);
     const spots = [];
@@ -359,7 +379,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(root);
     root.updateMatrixWorld(true);
     const box = new THREE.Box3(new THREE.Vector3(-hx, z0, -hz), new THREE.Vector3(hx, z1, hz));
-    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings, baked: null };
+    built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame, openings, baked: null, skeleton, skeletonDoor: null, skeletonPop: null, confined };
     if (mappedLights) setMappedLights(true);
     lastSunUpdate = -1;
     applyQuality();
@@ -644,10 +664,32 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const local = group.worldToLocal(new THREE.Vector3(player.x, player.footY + 1, player.z));
     f.toggle(local.z > 0 ? 1 : -1);
     window.ResidenceSound?.play(f.kind === 'hinged door' ? 'door-handle' : 'slider-move');
+    // A cupboard door: the skeleton pops in behind it as it opens, and leaves when it closes. One skeleton only.
+    if (f.smallSpace && f.smallSpace.space.volume <= confinedVolume) {
+      if (f.open) showSkeleton(group, f);
+      else if (built.skeletonDoor === group) { built.skeleton.visible = false; built.skeletonDoor = null; }
+    }
+  }
+  function showSkeleton(group, f) {
+    const { space, side } = f.smallSpace, sk = built.skeleton;
+    const fr = built.frame;
+    // Space centre in world, and the door's own position; the skeleton faces the door from the back of the space.
+    const cx = (space.x0 + space.x1) / 2 - fr.cx, cz = -((space.y0 + space.y1) / 2 - fr.cy);
+    const door = new THREE.Vector3(); group.getWorldPosition(door);
+    const yaw = Math.atan2(door.x - cx, door.z - cz);
+    const fit = Math.min(1, (Math.min(space.x1 - space.x0, space.y1 - space.y0) - 0.06) / 0.5, (space.ceiling - 0.05) / 1.75);
+    const scale = Math.max(0.35, fit);
+    const toward = new THREE.Vector3(door.x - cx, 0, door.z - cz).normalize();
+    const to = new THREE.Vector3(cx, built.floorTop, cz).addScaledVector(toward, 0.12);
+    const from = new THREE.Vector3(cx, built.floorTop, cz).addScaledVector(toward, -0.15);
+    built.skeletonDoor = group;
+    built.skeletonPop = popIn(sk, { from, to, scale, yaw });
+    void side;
   }
   function stepFixtures(dt) {
     let moving = false;
     for (const g of built?.fixtures || []) if (g.userData.fixture.step?.(dt)) moving = true;
+    if (built?.skeletonPop && built.skeletonPop.step(dt)) moving = true;
     return moving;
   }
   // Lime silhouette on the fixture under the crosshair (the tour's mask pass): the whole assembly in white into
@@ -1027,5 +1069,5 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const src = new URLSearchParams(location.search).get('src');
   if (src) loadUrl(src); else setStatus('');
 
-  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, get mappedLights() { return mappedLights; }, get renderer() { return renderer; }, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
+  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, setConfinedVolume: v => { confinedVolume = v; }, get mappedLights() { return mappedLights; }, get renderer() { return renderer; }, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
 })();

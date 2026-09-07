@@ -36220,10 +36220,23 @@ void main() {
       }
       rooms.push({ id: `room-${rooms.length + 1}`, cells });
     }
-    const kept = [];
+    const kept = [], small = [];
+    const smallAt = new Int32Array(W * H).fill(-1);
     for (const r of rooms) {
       if (r.cells.length * c * c < o.minArea) {
-        for (const k of r.cells) room[k] = -1;
+        let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity, zs = [];
+        for (const k of r.cells) {
+          room[k] = -1;
+          smallAt[k] = small.length;
+          const i = k % W, j = (k - i) / W;
+          bx0 = Math.min(bx0, i);
+          bx1 = Math.max(bx1, i);
+          by0 = Math.min(by0, j);
+          by1 = Math.max(by1, j);
+          zs.push(roofZ[k]);
+        }
+        const area2 = r.cells.length * c * c, zsSorted = zs.sort((a, b) => a - b), ceiling = Math.min(Math.max(2.2, zsSorted[Math.floor(zs.length / 2)] - o.ceilingAllowance), 4);
+        small.push({ id: `space-${small.length + 1}`, x0: x0 + bx0 * c, y0: y0 + by0 * c, x1: x0 + (bx1 + 1) * c, y1: y0 + (by1 + 1) * c, area: area2, ceiling, volume: area2 * ceiling });
         continue;
       }
       kept.push(r);
@@ -36346,7 +36359,7 @@ void main() {
       if (!roomLights.length) console.warn(`[lighting] ${r.id}: no light fits (${r.area.toFixed(1)} m2)`);
       delete r.cells;
     }
-    return { rooms: kept, lights, grid: { x0, y0, cell: c, W, H, state, room } };
+    return { rooms: kept, lights, small, grid: { x0, y0, cell: c, W, H, state, room, smallAt } };
   }
   function createRoomMask(pool) {
     const uniforms = {
@@ -36933,6 +36946,104 @@ float roomMask(int i, vec3 vRoomPos) {
     return group;
   }
 
+  // ../js/fixtures/skeleton.js
+  var boneMaterial = () => new MeshStandardMaterial({ color: 15130573, roughness: 0.6, metalness: 0, emissive: 4011824 });
+  function buildSkull(bone = boneMaterial()) {
+    const g = new Group();
+    const dark = new MeshBasicMaterial({ color: 1052688 });
+    const add = (geo, x, y, z, mat = bone) => {
+      const m = new Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
+    add(new SphereGeometry(0.095, 20, 16), 0, 0, 0).scale.set(1, 1.1, 1.05);
+    add(new BoxGeometry(0.1, 0.05, 0.085), 0, -0.085, 0.02);
+    add(new SphereGeometry(0.02, 8, 6), -0.035, 0.01, 0.085, dark);
+    add(new SphereGeometry(0.02, 8, 6), 0.035, 0.01, 0.085, dark);
+    add(new BoxGeometry(0.075, 0.012, 0.03), 0, -0.065, 0.075, dark);
+    return g;
+  }
+  function createSkeleton() {
+    const g = new Group();
+    const bone = boneMaterial();
+    const add = (geo, x, y, z, mat = bone) => {
+      const m = new Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
+    const V = (x, y, z) => new Vector3(x, y, z);
+    const link = (a, b, r) => {
+      const d = b.clone().sub(a), len = d.length();
+      const m = new Mesh(new CylinderGeometry(r, r * 0.85, len, 8), bone);
+      m.position.copy(a).lerp(b, 0.5);
+      m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
+    const joint = (p, r) => add(new SphereGeometry(r, 10, 8), p.x, p.y, p.z);
+    const skull = buildSkull(bone);
+    skull.position.y = 1.6;
+    g.add(skull);
+    for (let i = 0; i < 20; i++) add(new CylinderGeometry(0.022, 0.022, 0.02, 8), 0, 0.97 + i * 0.028, 0);
+    const ribs = [0.1, 0.125, 0.14, 0.15, 0.15, 0.145, 0.13, 0.11];
+    ribs.forEach((r, i) => {
+      const ring = add(new TorusGeometry(r, 7e-3, 6, 28), 0, 1.16 + i * 0.038, 0.02);
+      ring.rotation.x = Math.PI / 2;
+      ring.scale.z = 0.7;
+    });
+    add(new BoxGeometry(0.03, 0.26, 0.015), 0, 1.3, 0.125);
+    link(V(0, 1.45, 0.02), V(-0.18, 1.45, -0.01), 8e-3);
+    link(V(0, 1.45, 0.02), V(0.18, 1.45, -0.01), 8e-3);
+    const pelvis = add(new TorusGeometry(0.12, 0.022, 8, 24), 0, 0.95, 0);
+    pelvis.rotation.x = Math.PI / 2;
+    pelvis.scale.z = 0.6;
+    add(new BoxGeometry(0.06, 0.09, 0.03), 0, 0.93, -0.05);
+    for (const sgn of [-1, 1]) {
+      const sh = V(sgn * 0.19, 1.45, 0), el = V(sgn * 0.215, 1.15, -0.02), wr = V(sgn * 0.22, 0.89, 0.03);
+      joint(sh, 0.03);
+      link(sh, el, 0.016);
+      joint(el, 0.024);
+      link(el, wr, 0.011);
+      link(el.clone().add(V(sgn * 0.012, 0, 0.012)), wr.clone().add(V(sgn * 8e-3, 0, 8e-3)), 8e-3);
+      add(new BoxGeometry(0.055, 0.08, 0.018), wr.x, wr.y - 0.05, wr.z);
+      for (let f = 0; f < 4; f++) add(new CylinderGeometry(5e-3, 4e-3, 0.07, 6), wr.x - 0.02 + f * 0.013, wr.y - 0.125, wr.z);
+      const hip = V(sgn * 0.09, 0.93, 0), kn = V(sgn * 0.095, 0.51, 0.01), an = V(sgn * 0.09, 0.06, -0.01);
+      joint(hip, 0.03);
+      link(hip, kn, 0.02);
+      joint(kn, 0.032);
+      link(kn, an, 0.016);
+      link(kn.clone().add(V(sgn * 0.02, 0, -0.01)), an.clone().add(V(sgn * 0.015, 0, -5e-3)), 8e-3);
+      joint(an, 0.022);
+      add(new BoxGeometry(0.075, 0.04, 0.2), an.x, 0.025, 0.07);
+    }
+    skull.rotation.z = 0.12;
+    skull.rotation.x = 0.08;
+    g.userData.height = 1.7;
+    return g;
+  }
+  function popIn(group, { from, to, scale = 1, yaw = 0, duration = 0.35 } = {}) {
+    let t = 0;
+    group.visible = true;
+    group.rotation.y = yaw;
+    group.position.copy(from);
+    group.scale.setScalar(scale * 0.6);
+    return {
+      step(dt) {
+        if (t >= 1) return false;
+        t = Math.min(1, t + dt / duration);
+        const k = easeInOut(t);
+        group.position.lerpVectors(from, to, k);
+        group.scale.setScalar(scale * (0.6 + 0.4 * k));
+        return true;
+      }
+    };
+  }
+
   // ../js/plan.js
   BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
   BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -36948,6 +37059,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const RENDER = { dpr: TOUCH2 ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH2 ? 2 : 3, shadowSize: 512, haloLights: true };
     const SPOT_POOL = RENDER.lights;
     const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1, base: 1, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
+    let confinedVolume = 1;
     let mappedLights = true;
     const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
     const TUNE_KEY = "residence.tour.lighting.v1";
@@ -37214,18 +37326,18 @@ float roomMask(int i, vec3 vRoomPos) {
       for (const o of openings) {
         const position = [o.cx - frame2.cx, floorTop + o.z0, -(o.cy - frame2.cy)];
         const height = o.z1 - o.z0;
-        let g = null;
-        if (o.hinged) g = createHingedDoor({ model: doorModel, width: o.width, hinge: o.hinge, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
-        else if (/sliding/.test(o.kind)) g = createSlidingDoor({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
-        else if (/window|glass/.test(o.kind)) g = createWindow({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
-        if (!g) {
+        let g2 = null;
+        if (o.hinged) g2 = createHingedDoor({ model: doorModel, width: o.width, hinge: o.hinge, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+        else if (/sliding/.test(o.kind)) g2 = createSlidingDoor({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+        else if (/window|glass/.test(o.kind)) g2 = createWindow({ width: o.x1 - o.x0 > o.y1 - o.y0 ? o.x1 - o.x0 : o.y1 - o.y0, height, depth: o.depth, position, rotationDeg: o.rotation, materials: mats.fixtures, label: o.label });
+        if (!g2) {
           if (/window|sliding|glass/.test(o.kind)) place(buildGlazing(o, mats.fixtures.glass, frame2), meshes);
           continue;
         }
-        g.userData.fixture.id = o.id;
-        root.add(g);
-        fixtures.push(g);
-        fixtureMeshes.push(...g.userData.fixture.meshes);
+        g2.userData.fixture.id = o.id;
+        root.add(g2);
+        fixtures.push(g2);
+        fixtureMeshes.push(...g2.userData.fixture.meshes);
       }
       const lighting = planDownlights(json);
       const ceilingMaterial = mats.finishes.ceiling();
@@ -37241,6 +37353,34 @@ float roomMask(int i, vec3 vRoomPos) {
         yLo: floorTop - 0.45,
         yHi: floorTop + lighting.rooms[l.room].ceiling + 0.35
       }));
+      const g = lighting.grid;
+      const spaceAt = (wx, wz) => {
+        if (!g) return null;
+        const px2 = wx + frame2.cx, py2 = -wz + frame2.cy;
+        const i = Math.floor((px2 - g.x0) / g.cell), j = Math.floor((py2 - g.y0) / g.cell);
+        if (i < 0 || j < 0 || i >= g.W || j >= g.H) return null;
+        const n = g.smallAt[j * g.W + i];
+        return n >= 0 ? lighting.small[n] : null;
+      };
+      const confined = [];
+      for (const fx of fixtures) {
+        const f = fx.userData.fixture;
+        if (f.kind !== "hinged door") continue;
+        fx.updateMatrixWorld(true);
+        for (const side of [-1, 1]) {
+          const p = fx.localToWorld(new Vector3(0, 0.5, side * ((f.depth || 0.23) / 2 + 0.2)));
+          const space = spaceAt(p.x, p.z);
+          if (space) {
+            f.smallSpace = { space, side };
+            confined.push({ door: f.label, space: space.id, volume: +space.volume.toFixed(2) });
+            break;
+          }
+        }
+      }
+      if (confined.length) console.info("[plan] doors into small spaces (skeleton at or under " + confinedVolume + " m3):", confined);
+      const skeleton = createSkeleton();
+      skeleton.visible = false;
+      root.add(skeleton);
       const fittings = buildDownlightFixtures(lighting.lights.map((l) => ({ ...l, z: l.z + floorTop })), frame2);
       root.add(fittings.bezel, fittings.lens, fittings.trim);
       const spots = [];
@@ -37334,11 +37474,11 @@ float roomMask(int i, vec3 vRoomPos) {
       scene.add(root);
       root.updateMatrixWorld(true);
       const box2 = new Box3(new Vector3(-hx, z0, -hz), new Vector3(hx, z1, hz));
-      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings, baked: null };
+      built = { root, meshes, fixtures, fixtureMeshes, reflector, floorTop, groundY, box: box2, triangles, name, solids: meshes.length, lighting, leds, spots, lens: fittings.lens, frame: frame2, openings, baked: null, skeleton, skeletonDoor: null, skeletonPop: null, confined };
       if (mappedLights) setMappedLights(true);
       lastSunUpdate = -1;
       applyQuality();
-      const doors = fixtures.filter((g) => g.userData.fixture.kind === "hinged door").length;
+      const doors = fixtures.filter((g2) => g2.userData.fixture.kind === "hinged door").length;
       modelName.textContent = `${json.job || name} \xB7 ${meshes.length} surfaces \xB7 ${openings.length} openings \xB7 ${doors} doors \xB7 ${lighting.rooms.length} rooms \xB7 ${leds.length} downlights \xB7 ${Math.round(triangles / 1e3)}k triangles`;
       document.title = `${json.job || name} \xB7 House model`;
       console.info(`[plan] model: ${meshes.length} surfaces, ${fixtures.length} fixtures, ${Math.round(triangles)} triangles, floor at ${floorTop.toFixed(3)} m`);
@@ -37704,10 +37844,33 @@ float roomMask(int i, vec3 vRoomPos) {
       const local = group.worldToLocal(new Vector3(player.x, player.footY + 1, player.z));
       f.toggle(local.z > 0 ? 1 : -1);
       window.ResidenceSound?.play(f.kind === "hinged door" ? "door-handle" : "slider-move");
+      if (f.smallSpace && f.smallSpace.space.volume <= confinedVolume) {
+        if (f.open) showSkeleton(group, f);
+        else if (built.skeletonDoor === group) {
+          built.skeleton.visible = false;
+          built.skeletonDoor = null;
+        }
+      }
+    }
+    function showSkeleton(group, f) {
+      const { space, side } = f.smallSpace, sk = built.skeleton;
+      const fr = built.frame;
+      const cx = (space.x0 + space.x1) / 2 - fr.cx, cz = -((space.y0 + space.y1) / 2 - fr.cy);
+      const door = new Vector3();
+      group.getWorldPosition(door);
+      const yaw = Math.atan2(door.x - cx, door.z - cz);
+      const fit = Math.min(1, (Math.min(space.x1 - space.x0, space.y1 - space.y0) - 0.06) / 0.5, (space.ceiling - 0.05) / 1.75);
+      const scale = Math.max(0.35, fit);
+      const toward = new Vector3(door.x - cx, 0, door.z - cz).normalize();
+      const to = new Vector3(cx, built.floorTop, cz).addScaledVector(toward, 0.12);
+      const from = new Vector3(cx, built.floorTop, cz).addScaledVector(toward, -0.15);
+      built.skeletonDoor = group;
+      built.skeletonPop = popIn(sk, { from, to, scale, yaw });
     }
     function stepFixtures(dt) {
       let moving = false;
       for (const g of built?.fixtures || []) if (g.userData.fixture.step?.(dt)) moving = true;
+      if (built?.skeletonPop && built.skeletonPop.step(dt)) moving = true;
       return moving;
     }
     let outlineMeshes = [], outlineOwner = null, outlineTarget = null;
@@ -38250,7 +38413,9 @@ float roomMask(int i, vec3 vRoomPos) {
     const src = new URLSearchParams(location.search).get("src");
     if (src) loadUrl(src);
     else setStatus("");
-    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, get mappedLights() {
+    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, setConfinedVolume: (v) => {
+      confinedVolume = v;
+    }, get mappedLights() {
       return mappedLights;
     }, get renderer() {
       return renderer;

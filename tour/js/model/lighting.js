@@ -102,10 +102,18 @@ export function planDownlights(json, options = {}) {
     }
     rooms.push({ id: `room-${rooms.length + 1}`, cells });
   }
-  // Drop the small ones (cavities, cupboards).
-  const kept = [];
+  // Drop the small ones (cavities, cupboards) from the lighting, but keep them as confined spaces: a door that
+  // opens into one is a cupboard door.
+  const kept = [], small = [];
+  const smallAt = new Int32Array(W * H).fill(-1);
   for (const r of rooms) {
-    if (r.cells.length * c * c < o.minArea) { for (const k of r.cells) room[k] = -1; continue; }
+    if (r.cells.length * c * c < o.minArea) {
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity, zs = [];
+      for (const k of r.cells) { room[k] = -1; smallAt[k] = small.length; const i = k % W, j = (k - i) / W; bx0 = Math.min(bx0, i); bx1 = Math.max(bx1, i); by0 = Math.min(by0, j); by1 = Math.max(by1, j); zs.push(roofZ[k]); }
+      const area = r.cells.length * c * c, zsSorted = zs.sort((a, b) => a - b), ceiling = Math.min(Math.max(2.2, zsSorted[Math.floor(zs.length / 2)] - o.ceilingAllowance), 4.0);
+      small.push({ id: `space-${small.length + 1}`, x0: x0 + bx0 * c, y0: y0 + by0 * c, x1: x0 + (bx1 + 1) * c, y1: y0 + (by1 + 1) * c, area, ceiling, volume: area * ceiling });
+      continue;
+    }
     kept.push(r);
   }
   kept.forEach((r, n) => { r.index = n; for (const k of r.cells) room[k] = n; });
@@ -219,7 +227,7 @@ export function planDownlights(json, options = {}) {
     if (!roomLights.length) console.warn(`[lighting] ${r.id}: no light fits (${r.area.toFixed(1)} m2)`);
     delete r.cells;
   }
-  return { rooms: kept, lights, grid: { x0, y0, cell: c, W, H, state, room } };
+  return { rooms: kept, lights, small, grid: { x0, y0, cell: c, W, H, state, room, smallAt } };
 }
 
 // ---------------------------------------------------------------- the tour's room mask
