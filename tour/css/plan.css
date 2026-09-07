@@ -7,6 +7,11 @@ body[data-tour-mode="walk"] #tour-scene { cursor: none; }
 #tour-title { color: rgba(244, 242, 236, .8); }
 #tour-stats { display: block; }
 
+#tour-tune .tune-buttons { display: flex; gap: 8px; }
+#tour-tune button[data-close] { border-color: #ffc866; color: #ffc866; }
+#tour-mobile button[data-settings] { font-size: 24px; }
+body[data-touch="true"] #tour-tune { max-height: calc(100dvh - 80px); overflow-y: auto; }
+
 #plan-open {
   position: absolute;
   top: 40px;

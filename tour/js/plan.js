@@ -39,7 +39,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const RENDER = { dpr: TOUCH ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH ? 2 : 3, shadowSize: 512, haloLights: true };
   const SPOT_POOL = RENDER.lights;   // pooled downlights; the nearest fixtures take a slot, the rest wait
   const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1.0, base: 1.0, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
-  let confinedVolume = 1.0;   // m3: a door into a space this small or smaller has a skeleton behind it
+  let confinedVolume = 8.0;   // m3: a door into a space this small or smaller has a skeleton behind it
   let mappedLights = true;    // the walk renders from baked light maps (direct plus bounce light); L switches to the run-time spot pool
   const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
   const TUNE_KEY = 'residence.tour.lighting.v1';   // shared with tour.html, so both pages show the same light
@@ -906,10 +906,12 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.target.name in tune) { tune[e.target.name] = Number(e.target.value); if (e.target.name === 'hour') tune.clock = 0; applyTune(); syncTunePanel(); }
   });
   tunePanel.querySelector('[data-reset]').addEventListener('click', () => { Object.assign(tune, TUNE_DEFAULTS); applyTune(); syncTunePanel(); });
+  tunePanel.querySelector('[data-close]').addEventListener('click', () => setTuning(false));
   tunePanel.addEventListener('keydown', e => e.stopPropagation());
   function setTuning(open) {
     tuningOpen = open;
     tunePanel.hidden = !open;
+    if (open) { keys.clear(); for (const b of mobileBar.querySelectorAll('button')) b.dataset.active = 'false'; }
     if (open) { syncTunePanel(); if (document.pointerLockElement === tourCanvas) document.exitPointerLock(); }
   }
   syncTunePanel(); applyTune();
@@ -928,6 +930,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.code === 'KeyL') { setMappedLights(!mappedLights); syncTunePanel(); showHint(mappedLights ? 'House lights: baked light maps' : 'House lights: real time'); return; }
     if (mode !== 'walk') return;
     if (e.code === 'Escape') { if (tuningOpen) { setTuning(false); return; } exitWalk(); return; }
+    if (tuningOpen) return;   // the settings panel holds the tour until it is closed
     if (e.code === 'KeyE' || e.code === 'Space') { activateFixture(focusFixture); e.preventDefault(); return; }
     keys.add(e.code);
     if (/^(Arrow|Key[WASD]|Shift)/.test(e.code)) e.preventDefault();
@@ -952,6 +955,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   let press = null, pinch = null, tap = null;
   tourCanvas.addEventListener('contextmenu', e => e.preventDefault());
   tourCanvas.addEventListener('pointerdown', e => {
+    if (tuningOpen && mode === 'walk') return;
     if (e.pointerType === 'touch') { pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: zoomTarget, distance: orbit.distance }; press = null; } }
     if (mode === 'walk') {
       if (e.pointerType !== 'touch' && document.pointerLockElement !== tourCanvas) { dragging = true; lastX = e.clientX; lastY = e.clientY; tourCanvas.requestPointerLock?.(); }
@@ -966,6 +970,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     e.preventDefault();
   });
   tourCanvas.addEventListener('pointermove', e => {
+    if (tuningOpen && mode === 'walk') return;
     if (e.pointerType === 'touch' && pointers.has(e.pointerId)) {
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pinch && pointers.size >= 2) {
@@ -992,6 +997,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   });
   const endPointer = e => {
+    if (tuningOpen && mode === 'walk') { tap = null; press = null; return; }
     if (e.pointerType === 'touch') { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; }
     dragging = pointers.size > 0;
     if (mode === 'walk' && tap && e.pointerType === 'touch' && pointers.size === 0) {
@@ -1014,14 +1020,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   for (const button of mobileBar.querySelectorAll('button')) {
     const move = button.dataset.move;
     const code = move === 'forward' ? 'KeyW' : 'KeyS';
-    const pressKey = e => { e.preventDefault(); if (move) { keys.add(code); button.dataset.active = 'true'; } };
+    const pressKey = e => { e.preventDefault(); if (move && !tuningOpen) { keys.add(code); button.dataset.active = 'true'; } };
     const release = () => { if (move) { keys.delete(code); button.dataset.active = 'false'; } };
     button.addEventListener('pointerdown', pressKey);
     button.addEventListener('pointerup', release);
     button.addEventListener('pointercancel', release);
     button.addEventListener('pointerleave', release);
     button.addEventListener('contextmenu', e => e.preventDefault());
-    if (!move) button.addEventListener('click', () => activateFixture(focusFixture));
+    if (button.dataset.settings !== undefined) { button.addEventListener('click', () => setTuning(!tuningOpen)); continue; }
+    if (!move) button.addEventListener('click', () => { if (!tuningOpen) activateFixture(focusFixture); });
   }
 
   // ---------------------------------------------------------------- loading

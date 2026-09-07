@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#1c1e1d">
   <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
   <title>Plan Model Viewer</title>
-  <link rel="stylesheet" href="tour/css/tour.css?v=mtqnn7us">
-  <link rel="stylesheet" href="tour/css/plan.css?v=mtqnn7us">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtqnyd6o">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtqnyd6o">
 </head>
 <body data-tour-mode="overview">
   <!-- The residence engine runs hidden and paused: the viewer lifts its standard hinged door from it. -->
@@ -30,10 +30,11 @@
     <div id="tour-mobile" aria-label="Touch controls">
       <button type="button" data-move="back" aria-label="Walk backward">&#9660;</button>
       <button type="button" data-use aria-label="Use door">Use</button>
+      <button type="button" data-settings aria-label="Settings">&#9881;</button>
       <button type="button" data-move="forward" aria-label="Walk forward">&#9650;</button>
     </div>
     <form id="tour-tune" hidden>
-      <div class="tune-head"><strong>Lighting</strong><span>T to close · click view to look again</span></div>
+      <div class="tune-head"><strong>Settings</strong><span>The tour waits while this panel is open</span></div>
       <label>Downlight power <input type="range" name="power" min="0" max="40" step="0.5"><output></output></label>
       <label>Downlight halo <input type="range" name="halo" min="0" max="0.6" step="0.01"><output></output></label>
       <label>Floor light <input type="range" name="floor" min="0" max="2" step="0.05"><output></output></label>
@@ -44,7 +45,7 @@
       <label>Time of day <input type="range" name="hour" min="0" max="24" step="0.1"><output></output></label>
       <label class="tune-check"><input type="checkbox" name="clock" checked> Clock runs · 2.5 s = 1 hour</label>
       <label class="tune-check"><input type="checkbox" name="mapped"> House lights from baked maps (L)</label>
-      <button type="button" data-reset>Reset</button>
+      <div class="tune-buttons"><button type="button" data-reset>Reset</button><button type="button" data-close>Close · continue tour</button></div>
     </form>
     <div id="tour-hint" data-hidden="true"></div>
   </div>
@@ -63,8 +64,8 @@
   </section>
 
   <script>window.__RESIDENCE_PAUSED__ = true;   /* the engine only supplies geometry here; it never draws */</script>
-  <script src="tour/js/residence-sound.js?v=mtqnn7us"></script>
-  <script src="tour/js/residence-model.js?v=mtqnn7us"></script>
-  <script src="tour/js/plan.bundle.js?v=mtqnn7us"></script>
+  <script src="tour/js/residence-sound.js?v=mtqnyd6o"></script>
+  <script src="tour/js/residence-model.js?v=mtqnyd6o"></script>
+  <script src="tour/js/plan.bundle.js?v=mtqnyd6o"></script>
 </body>
 </html>

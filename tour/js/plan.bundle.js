@@ -37059,7 +37059,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const RENDER = { dpr: TOUCH2 ? 1 : 1.25, reflection: 0.3, reflectEvery: 2, sunShadow: 1024, lessOften: true, direct: true, lights: 32, shadowSpots: TOUCH2 ? 2 : 3, shadowSize: 512, haloLights: true };
     const SPOT_POOL = RENDER.lights;
     const TUNE_DEFAULTS = { power: 9, floor: 0.6, wall: 1, base: 1, exposure: 0.5, hour: 14, clock: 1, glass: 2.4, halo: 0.15 };
-    let confinedVolume = 1;
+    let confinedVolume = 8;
     let mappedLights = true;
     const SIM_SECONDS_PER_REAL_SECOND = 3600 / 2.5;
     const TUNE_KEY = "residence.tour.lighting.v1";
@@ -38159,10 +38159,15 @@ float roomMask(int i, vec3 vRoomPos) {
       applyTune();
       syncTunePanel();
     });
+    tunePanel.querySelector("[data-close]").addEventListener("click", () => setTuning(false));
     tunePanel.addEventListener("keydown", (e) => e.stopPropagation());
     function setTuning(open) {
       tuningOpen = open;
       tunePanel.hidden = !open;
+      if (open) {
+        keys.clear();
+        for (const b of mobileBar.querySelectorAll("button")) b.dataset.active = "false";
+      }
       if (open) {
         syncTunePanel();
         if (document.pointerLockElement === tourCanvas) document.exitPointerLock();
@@ -38202,6 +38207,7 @@ float roomMask(int i, vec3 vRoomPos) {
         exitWalk();
         return;
       }
+      if (tuningOpen) return;
       if (e.code === "KeyE" || e.code === "Space") {
         activateFixture(focusFixture);
         e.preventDefault();
@@ -38229,6 +38235,7 @@ float roomMask(int i, vec3 vRoomPos) {
     let press = null, pinch = null, tap = null;
     tourCanvas.addEventListener("contextmenu", (e) => e.preventDefault());
     tourCanvas.addEventListener("pointerdown", (e) => {
+      if (tuningOpen && mode === "walk") return;
       if (e.pointerType === "touch") {
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pointers.size === 2) {
@@ -38261,6 +38268,7 @@ float roomMask(int i, vec3 vRoomPos) {
       e.preventDefault();
     });
     tourCanvas.addEventListener("pointermove", (e) => {
+      if (tuningOpen && mode === "walk") return;
       if (e.pointerType === "touch" && pointers.has(e.pointerId)) {
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pinch && pointers.size >= 2) {
@@ -38296,6 +38304,11 @@ float roomMask(int i, vec3 vRoomPos) {
       }
     });
     const endPointer = (e) => {
+      if (tuningOpen && mode === "walk") {
+        tap = null;
+        press = null;
+        return;
+      }
       if (e.pointerType === "touch") {
         pointers.delete(e.pointerId);
         if (pointers.size < 2) pinch = null;
@@ -38323,7 +38336,7 @@ float roomMask(int i, vec3 vRoomPos) {
       const code = move === "forward" ? "KeyW" : "KeyS";
       const pressKey = (e) => {
         e.preventDefault();
-        if (move) {
+        if (move && !tuningOpen) {
           keys.add(code);
           button.dataset.active = "true";
         }
@@ -38339,7 +38352,13 @@ float roomMask(int i, vec3 vRoomPos) {
       button.addEventListener("pointercancel", release);
       button.addEventListener("pointerleave", release);
       button.addEventListener("contextmenu", (e) => e.preventDefault());
-      if (!move) button.addEventListener("click", () => activateFixture(focusFixture));
+      if (button.dataset.settings !== void 0) {
+        button.addEventListener("click", () => setTuning(!tuningOpen));
+        continue;
+      }
+      if (!move) button.addEventListener("click", () => {
+        if (!tuningOpen) activateFixture(focusFixture);
+      });
     }
     function setStatus(text, error = false) {
       loadStatus.textContent = text;
