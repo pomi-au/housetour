@@ -37112,7 +37112,7 @@ float roomMask(int i, vec3 vRoomPos) {
     const modelName = document.getElementById("plan-name");
     body.dataset.touch = TOUCH2 ? "true" : "false";
     const OVERVIEW_HINT = TOUCH2 ? "Tap the floor to walk on it \xB7 drag to orbit \xB7 pinch to zoom" : "Click the floor to walk on it \xB7 drag to orbit \xB7 scroll to zoom \xB7 right-drag to pan";
-    const WALK_HINT = TOUCH2 ? "Stick walks \xB7 drag to look \xB7 pinch to zoom \xB7 Use opens doors" : "<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk \xB7 <kbd>Shift</kbd> run \xB7 mouse look \xB7 click doors \xB7 <kbd>T</kbd> lighting \xB7 <kbd>Esc</kbd> exit";
+    const WALK_HINT = TOUCH2 ? "Stick walks and turns \xB7 hold a drag to keep turning \xB7 pinch to zoom \xB7 \u270B opens doors" : "<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk \xB7 <kbd>Shift</kbd> run \xB7 mouse look \xB7 click doors \xB7 <kbd>T</kbd> lighting \xB7 <kbd>Esc</kbd> exit";
     let mode = "overview";
     let hintTimer = 0;
     function showHint(html, autoHide = true) {
@@ -37573,7 +37573,8 @@ float roomMask(int i, vec3 vRoomPos) {
       introRunning = false;
     }
     const player = { x: 0, z: 0, footY: 0, eyeY: 0, yaw: 0, pitch: 0, vx: 0, vz: 0, vy: 0, grounded: true, bob: 0, speed: 0 };
-    const stick = { x: 0, y: 0, active: false };
+    const stick = { x: 0, y: 0, active: false, refYaw: 0 };
+    let touchLook = null;
     const keys = /* @__PURE__ */ new Set();
     const raycaster = new Raycaster();
     raycaster.firstHitOnly = true;
@@ -37622,9 +37623,16 @@ float roomMask(int i, vec3 vRoomPos) {
       return hit ? hit.point.y : null;
     }
     function stepPlayer(dt) {
-      const forward = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) + stick.y;
-      const strafe = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0) + stick.x;
+      const forward = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0);
+      const strafe = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
       const run = keys.has("ShiftLeft") || keys.has("ShiftRight");
+      if (touchLook) {
+        const dead = 10, rate = 0.014;
+        const dx2 = touchLook.x - touchLook.startX, dy = touchLook.y - touchLook.startY;
+        const ox = Math.sign(dx2) * Math.max(0, Math.abs(dx2) - dead), oy = Math.sign(dy) * Math.max(0, Math.abs(dy) - dead);
+        player.yaw -= ox * rate * dt;
+        player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - oy * rate * 0.7 * dt));
+      }
       if (forward || strafe) zoomTarget = 1;
       zoomLevel += (zoomTarget - zoomLevel) * Math.min(1, dt * 10);
       const fov2 = BASE_FOV / zoomLevel;
@@ -37634,11 +37642,23 @@ float roomMask(int i, vec3 vRoomPos) {
       }
       let tx = 0, tz = 0;
       if (forward || strafe) {
-        const len = Math.hypot(forward, strafe);
-        const mag = Math.min(1, len), speed = (run || stick.active && len > 0.85 ? RUN_SPEED : WALK_SPEED) * (stick.active ? mag : 1);
+        const len = Math.hypot(forward, strafe), speed = run ? RUN_SPEED : WALK_SPEED;
         const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
-        tx = (-sy * forward + cy * strafe) / len * speed;
-        tz = (-cy * forward - sy * strafe) / len * speed;
+        tx += (-sy * forward + cy * strafe) / len * speed;
+        tz += (-cy * forward - sy * strafe) / len * speed;
+      }
+      const stickLen = Math.hypot(stick.x, stick.y);
+      if (stick.active && stickLen > 0.08) {
+        const sy = Math.sin(stick.refYaw), cy = Math.cos(stick.refYaw);
+        const dx2 = (-sy * stick.y + cy * stick.x) / stickLen, dz2 = (-cy * stick.y - sy * stick.x) / stickLen;
+        const speed = (stickLen > 0.85 ? RUN_SPEED : WALK_SPEED) * Math.min(1, stickLen);
+        tx += dx2 * speed;
+        tz += dz2 * speed;
+        const target = Math.atan2(-dx2, -dz2);
+        let delta = target - player.yaw;
+        delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+        const turn = Math.min(Math.abs(delta), 2.6 * dt * Math.min(1, stickLen * 1.5));
+        player.yaw += Math.sign(delta) * turn;
       }
       const accel = forward || strafe ? 14 : 18;
       const k = 1 - Math.exp(-accel * dt);
@@ -38170,6 +38190,7 @@ float roomMask(int i, vec3 vRoomPos) {
       if (document.pointerLockElement === tourCanvas) document.exitPointerLock();
       keys.clear();
       releaseStick();
+      touchLook = null;
       focusFixture = null;
       updateOutline(null);
       crosshair.dataset.target = "false";
@@ -38325,6 +38346,7 @@ float roomMask(int i, vec3 vRoomPos) {
           lastX = e.clientX;
           lastY = e.clientY;
           tap = { x: e.clientX, y: e.clientY, t: performance.now() };
+          if (pointers.size === 1) touchLook = { startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY };
         } else if (e.button === 0) activateFixture(focusFixture);
         return;
       }
@@ -38340,6 +38362,7 @@ float roomMask(int i, vec3 vRoomPos) {
       if (tuningOpen && mode === "walk") return;
       if (e.pointerType === "touch" && pointers.has(e.pointerId)) {
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointers.size >= 2) touchLook = null;
         if (pinch && pointers.size >= 2) {
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) / pinch.d;
@@ -38350,9 +38373,13 @@ float roomMask(int i, vec3 vRoomPos) {
       }
       if (mode === "walk") {
         if (document.pointerLockElement === tourCanvas) look(e.movementX, e.movementY);
-        else if (dragging) {
-          const k = e.pointerType === "touch" ? 2.2 : 1;
-          look((e.clientX - lastX) * k, (e.clientY - lastY) * k);
+        else if (dragging && e.pointerType === "touch") {
+          if (touchLook) {
+            touchLook.x = e.clientX;
+            touchLook.y = e.clientY;
+          }
+        } else if (dragging) {
+          look(e.clientX - lastX, e.clientY - lastY);
           lastX = e.clientX;
           lastY = e.clientY;
         }
@@ -38383,6 +38410,7 @@ float roomMask(int i, vec3 vRoomPos) {
         if (pointers.size < 2) pinch = null;
       }
       dragging = pointers.size > 0;
+      if (e.pointerType === "touch" && pointers.size === 0) touchLook = null;
       if (mode === "walk" && tap && e.pointerType === "touch" && pointers.size === 0) {
         if (performance.now() - tap.t < 400 && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 12) {
           const ndcX = e.clientX / window.innerWidth * 2 - 1, ndcY = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -38415,6 +38443,7 @@ float roomMask(int i, vec3 vRoomPos) {
       stickCentre = { x: r.left + r.width / 2, y: r.top + r.height / 2, radius: r.width / 2 - 20 };
       stickPointer = e.pointerId;
       stick.active = true;
+      stick.refYaw = player.yaw;
       stickEl.dataset.active = "true";
       stickEl.setPointerCapture?.(e.pointerId);
       e.preventDefault();

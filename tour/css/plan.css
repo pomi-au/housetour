@@ -88,8 +88,8 @@ body[data-touch="true"][data-tour-mode="walk"] #tour-stick { display: block; }
   background: rgba(20, 22, 21, .62);
   color: #f4f2ec;
   font: inherit;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 34px;
+  line-height: 1;
   display: none;
   pointer-events: auto;
   touch-action: none;

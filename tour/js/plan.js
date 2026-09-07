@@ -67,7 +67,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   body.dataset.touch = TOUCH ? 'true' : 'false';
   const OVERVIEW_HINT = TOUCH ? 'Tap the floor to walk on it · drag to orbit · pinch to zoom' : 'Click the floor to walk on it · drag to orbit · scroll to zoom · right-drag to pan';
-  const WALK_HINT = TOUCH ? 'Stick walks · drag to look · pinch to zoom · Use opens doors' : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · mouse look · click doors · <kbd>T</kbd> lighting · <kbd>Esc</kbd> exit';
+  const WALK_HINT = TOUCH ? 'Stick walks and turns · hold a drag to keep turning · pinch to zoom · ✋ opens doors' : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · mouse look · click doors · <kbd>T</kbd> lighting · <kbd>Esc</kbd> exit';
 
   let mode = 'overview';
   let hintTimer = 0;
@@ -450,7 +450,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   // ---------------------------------------------------------------- player (as tour.js)
   const player = { x: 0, z: 0, footY: 0, eyeY: 0, yaw: 0, pitch: 0, vx: 0, vz: 0, vy: 0, grounded: true, bob: 0, speed: 0 };
-  const stick = { x: 0, y: 0, active: false };   // touch stick vector, -1..1
+  const stick = { x: 0, y: 0, active: false, refYaw: 0 };   // touch stick vector, -1..1, and the heading it was engaged at
+  let touchLook = null;   // { startX, startY, x, y } while one finger drags the view
   const keys = new Set();
   const raycaster = new THREE.Raycaster();
   raycaster.firstHitOnly = true;
@@ -481,22 +482,42 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     return hit ? hit.point.y : null;
   }
   function stepPlayer(dt) {
-    // Keys give unit steps; the touch stick gives an analog vector (x strafe, y forward) with deflection as speed.
-    const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + stick.y;
-    const strafe = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + stick.x;
+    // Keys give unit steps relative to the head. The touch stick gives an analog vector relative to the heading
+    // it was engaged at (stick.refYaw), and the head turns toward the direction of travel while it is held.
+    const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    const strafe = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
     const run = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    // Touch look: while the finger stays displaced from where it touched, the view keeps turning at a rate set by the offset.
+    if (touchLook) {
+      const dead = 10, rate = 0.014;   // rad/s per pixel beyond the dead zone
+      const dx = touchLook.x - touchLook.startX, dy = touchLook.y - touchLook.startY;
+      const ox = Math.sign(dx) * Math.max(0, Math.abs(dx) - dead), oy = Math.sign(dy) * Math.max(0, Math.abs(dy) - dead);
+      player.yaw -= ox * rate * dt;
+      player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - oy * rate * 0.7 * dt));
+    }
     if (forward || strafe) zoomTarget = 1;
     zoomLevel += (zoomTarget - zoomLevel) * Math.min(1, dt * 10);
     const fov = BASE_FOV / zoomLevel;
     if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
     let tx = 0, tz = 0;
     if (forward || strafe) {
-      const len = Math.hypot(forward, strafe);
-      // Full deflection walks; the outer 15 % of the stick runs. Keys walk, Shift runs.
-      const mag = Math.min(1, len), speed = (run || (stick.active && len > 0.85) ? RUN_SPEED : WALK_SPEED) * (stick.active ? mag : 1);
+      const len = Math.hypot(forward, strafe), speed = run ? RUN_SPEED : WALK_SPEED;
       const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
-      tx = ((-sy * forward) + (cy * strafe)) / len * speed;
-      tz = ((-cy * forward) - (sy * strafe)) / len * speed;
+      tx += ((-sy * forward) + (cy * strafe)) / len * speed;
+      tz += ((-cy * forward) - (sy * strafe)) / len * speed;
+    }
+    const stickLen = Math.hypot(stick.x, stick.y);
+    if (stick.active && stickLen > 0.08) {
+      // Direction of travel in the world, from the heading at engagement. Full deflection walks, the rim runs.
+      const sy = Math.sin(stick.refYaw), cy = Math.cos(stick.refYaw);
+      const dx = ((-sy * stick.y) + (cy * stick.x)) / stickLen, dz = ((-cy * stick.y) - (sy * stick.x)) / stickLen;
+      const speed = (stickLen > 0.85 ? RUN_SPEED : WALK_SPEED) * Math.min(1, stickLen);
+      tx += dx * speed; tz += dz * speed;
+      // The head turns toward the direction of travel, shortest way round, and settles on it.
+      const target = Math.atan2(-dx, -dz);
+      let delta = target - player.yaw; delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+      const turn = Math.min(Math.abs(delta), 2.6 * dt * Math.min(1, stickLen * 1.5));
+      player.yaw += Math.sign(delta) * turn;
     }
     const accel = (forward || strafe) ? 14 : 18;
     const k = 1 - Math.exp(-accel * dt);
@@ -913,7 +934,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mode = 'overview';
     setTuning(false);
     if (document.pointerLockElement === tourCanvas) document.exitPointerLock();
-    keys.clear(); releaseStick();
+    keys.clear(); releaseStick(); touchLook = null;
     focusFixture = null; updateOutline(null); crosshair.dataset.target = 'false';
     body.dataset.tourMode = 'overview';
     const eyePose = { yaw: player.yaw, pitch: -player.pitch, distance: 0.12, target: new THREE.Vector3(player.x, player.footY + EYE_HEIGHT, player.z) };
@@ -1000,7 +1021,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.pointerType === 'touch') { pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: zoomTarget, distance: orbit.distance }; press = null; } }
     if (mode === 'walk') {
       if (e.pointerType !== 'touch' && document.pointerLockElement !== tourCanvas) { dragging = true; lastX = e.clientX; lastY = e.clientY; tourCanvas.requestPointerLock?.(); }
-      if (e.pointerType === 'touch') { dragging = true; lastX = e.clientX; lastY = e.clientY; tap = { x: e.clientX, y: e.clientY, t: performance.now() }; }
+      if (e.pointerType === 'touch') { dragging = true; lastX = e.clientX; lastY = e.clientY; tap = { x: e.clientX, y: e.clientY, t: performance.now() }; if (pointers.size === 1) touchLook = { startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY }; }
       else if (e.button === 0) activateFixture(focusFixture);
       return;
     }
@@ -1014,6 +1035,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (tuningOpen && mode === 'walk') return;
     if (e.pointerType === 'touch' && pointers.has(e.pointerId)) {
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size >= 2) touchLook = null;
       if (pinch && pointers.size >= 2) {
         const [a, b] = [...pointers.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y) / pinch.d;
         if (mode === 'walk') zoomTarget = THREE.MathUtils.clamp(pinch.zoom * d, 1, 4); else orbit.distance = THREE.MathUtils.clamp(pinch.distance / d, 2, 400);
@@ -1022,7 +1044,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
     if (mode === 'walk') {
       if (document.pointerLockElement === tourCanvas) look(e.movementX, e.movementY);
-      else if (dragging) { const k = e.pointerType === 'touch' ? 2.2 : 1; look((e.clientX - lastX) * k, (e.clientY - lastY) * k); lastX = e.clientX; lastY = e.clientY; }
+      else if (dragging && e.pointerType === 'touch') { if (touchLook) { touchLook.x = e.clientX; touchLook.y = e.clientY; } }
+      else if (dragging) { look(e.clientX - lastX, e.clientY - lastY); lastX = e.clientX; lastY = e.clientY; }
       return;
     }
     if (!dragging || flying) return;
@@ -1041,6 +1064,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (tuningOpen && mode === 'walk') { tap = null; press = null; return; }
     if (e.pointerType === 'touch') { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; }
     dragging = pointers.size > 0;
+    if (e.pointerType === 'touch' && pointers.size === 0) touchLook = null;
     if (mode === 'walk' && tap && e.pointerType === 'touch' && pointers.size === 0) {
       // A still tap uses the door under the finger, else the one under the centre mark.
       if (performance.now() - tap.t < 400 && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 12) {
@@ -1066,7 +1090,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (tuningOpen || stickPointer !== null) return;
     const r = stickEl.getBoundingClientRect();
     stickCentre = { x: r.left + r.width / 2, y: r.top + r.height / 2, radius: r.width / 2 - 20 };
-    stickPointer = e.pointerId; stick.active = true; stickEl.dataset.active = 'true';
+    stickPointer = e.pointerId; stick.active = true; stick.refYaw = player.yaw; stickEl.dataset.active = 'true';
     stickEl.setPointerCapture?.(e.pointerId);
     e.preventDefault();
   });
