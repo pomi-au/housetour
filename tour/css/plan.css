@@ -22,7 +22,7 @@ body[data-tour-mode="walk"] #tour-scene { cursor: none; }
 body[data-tour-mode="walk"] #tour-topbar { display: flex; }
 body[data-touch="true"] #tour-topbar { left: auto; right: max(16px, calc(env(safe-area-inset-right) + 16px)); top: max(16px, calc(env(safe-area-inset-top) + 16px)); transform: none; }
 #tour-topbar #tour-exit { position: static; transform: none; display: block; }
-#tour-settings {
+#tour-plane, #tour-settings {
   border: 1px solid rgba(255, 255, 255, .25);
   border-radius: 999px;
   width: 36px;
@@ -35,9 +35,9 @@ body[data-touch="true"] #tour-topbar { left: auto; right: max(16px, calc(env(saf
   line-height: 1;
   cursor: pointer;
 }
-#tour-settings:hover { background: rgba(20, 22, 21, .85); }
-body[data-touch="true"] #tour-settings, body[data-touch="true"] #tour-topbar #tour-exit { height: 48px; min-width: 48px; font-size: 15px; }
-body[data-touch="true"] #tour-settings { font-size: 24px; }
+#tour-plane:hover, #tour-settings:hover { background: rgba(20, 22, 21, .85); }
+body[data-touch="true"] #tour-plane, body[data-touch="true"] #tour-settings, body[data-touch="true"] #tour-topbar #tour-exit { height: 48px; min-width: 48px; font-size: 15px; }
+body[data-touch="true"] #tour-plane, body[data-touch="true"] #tour-settings { font-size: 24px; }
 
 /* Analog stick, bottom left: the knob follows the finger inside the base; deflection sets direction and speed. */
 #tour-stick {

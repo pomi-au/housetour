@@ -21,6 +21,7 @@ import { extractStandardDoor, createHingedDoor, openingFor as doorOpeningFor } f
 import { createWindow } from './fixtures/window.js';
 import { createSlidingDoor } from './fixtures/sliding-door.js';
 import { createSkeleton, popIn } from './fixtures/skeleton.js';
+import { createPaperPlane } from './fixtures/paper-plane.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -113,7 +114,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   window.addEventListener('resize', applyQuality);
 
   // ---------------------------------------------------------------- materials (model/materials.js)
-  const roomMask = createRoomMask(SPOT_POOL);
+  const roomMask = createRoomMask(SPOT_POOL + 1);   // the last slot stays unmasked for the walker's lantern
+  const FREE_SLOT = SPOT_POOL;
+  roomMask.setRoom(FREE_SLOT, [], 0, 0, true);
   roomMask.scale.floor.value = tune.floor; roomMask.scale.wall.value = tune.wall;
   const mats = createMaterials({ renderer, glassStrength: tune.glass, patch: roomMask.patch });
   const { surfaceMaterial } = mats;
@@ -451,6 +454,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // ---------------------------------------------------------------- player (as tour.js)
   const player = { x: 0, z: 0, footY: 0, eyeY: 0, yaw: 0, pitch: 0, vx: 0, vz: 0, vy: 0, grounded: true, bob: 0, speed: 0 };
   const stick = { x: 0, y: 0, active: false, refYaw: 0 };   // touch stick vector, -1..1, and the heading it was engaged at
+  // Lantern: a warm point light the walker (or the plane) carries, on while moving, off when still.
+  const lantern = new THREE.PointLight(0xffe2b8, 0, 7, 2);
+  lantern.castShadow = false; lantern.visible = false;
+  scene.add(lantern);
+  const LANTERN_POWER = 7;
+  // Paper plane mode: the walker becomes a small plane seen from behind, flying inside the house.
+  let airplane = false;
+  const plane = { x: 0, y: 0, z: 0, speed: 0, roll: 0, prevYaw: 0, model: null };
+  const PLANE = { cruise: 1.5, max: 3.6, radius: 0.15, camBack: 0.75, camUp: 0.22, fov: 95 };
   let touchLook = null;   // { startX, startY, x, y } while one finger drags the view
   const keys = new Set();
   const raycaster = new THREE.Raycaster();
@@ -481,7 +493,73 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const hit = probe(player.x, player.footY + 1.1, player.z, 0, -1, 0, 6);
     return hit ? hit.point.y : null;
   }
+  function stepPlane(dt) {
+    const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + (stick.active ? stick.y : 0);
+    const steer = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + (stick.active ? stick.x : 0);
+    if (touchLook) {
+      const dead = 10, rate = 0.014;
+      const dx = touchLook.x - touchLook.startX, dy = touchLook.y - touchLook.startY;
+      player.yaw -= Math.sign(dx) * Math.max(0, Math.abs(dx) - dead) * rate * dt;
+      player.pitch = Math.max(-1.2, Math.min(1.2, player.pitch - Math.sign(dy) * Math.max(0, Math.abs(dy) - dead) * rate * 0.7 * dt));
+    }
+    player.yaw -= steer * 1.9 * dt;
+    // Cruise unless told otherwise: forward speeds up, back slows to a hover.
+    const target = Math.max(0, Math.min(PLANE.max, PLANE.cruise + forward * 2.1));
+    plane.speed += (target - plane.speed) * (1 - Math.exp(-3 * dt));
+    const cp = Math.cos(player.pitch);
+    const dir = new THREE.Vector3(-Math.sin(player.yaw) * cp, Math.sin(player.pitch), -Math.cos(player.yaw) * cp);
+    const step = plane.speed * dt;
+    if (step > 1e-5) {
+      const hit = probe(plane.x, plane.y, plane.z, dir.x, dir.y, dir.z, step + PLANE.radius);
+      if (hit) plane.speed = 0;   // a bump against a wall or a closed door
+      else { plane.x += dir.x * step; plane.y += dir.y * step; plane.z += dir.z * step; }
+    }
+    // Keep off the floor and the ceiling, and on the lot.
+    const down = probe(plane.x, plane.y, plane.z, 0, -1, 0, PLANE.radius + 0.02); if (down) plane.y = down.point.y + PLANE.radius + 0.02;
+    const up = probe(plane.x, plane.y, plane.z, 0, 1, 0, PLANE.radius + 0.02); if (up) plane.y = Math.max(plane.y - 0.05, up.point.y - PLANE.radius - 0.02);
+    plane.x = Math.max(LOT.x0 + 0.4, Math.min(LOT.x1 - 0.4, plane.x)); plane.z = Math.max(LOT.z0 + 0.4, Math.min(LOT.z1 - 0.4, plane.z));
+    // Bank into turns.
+    let dyaw = player.yaw - plane.prevYaw; dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw)); plane.prevYaw = player.yaw;
+    plane.roll += ((-dyaw / Math.max(dt, 1e-3)) * 0.35 - plane.roll) * (1 - Math.exp(-6 * dt));
+    plane.roll = Math.max(-0.9, Math.min(0.9, plane.roll));
+    const m = plane.model;
+    m.position.set(plane.x, plane.y, plane.z);
+    m.rotation.set(player.pitch, player.yaw, 0, 'YXZ'); m.userData.bank(plane.roll);
+    // Chase camera behind and a little above, looking along the flight.
+    camera.position.set(plane.x - dir.x * PLANE.camBack, plane.y + PLANE.camUp - dir.y * PLANE.camBack * 0.4, plane.z - dir.z * PLANE.camBack);
+    camera.lookAt(plane.x + dir.x * 0.6, plane.y + dir.y * 0.6, plane.z + dir.z * 0.6);
+    player.x = plane.x; player.z = plane.z; player.footY = plane.y - 0.2; player.eyeY = camera.position.y; player.speed = plane.speed;
+    const fov = PLANE.fov / zoomLevel;
+    if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  }
+  function setAirplane(on) {
+    if (mode !== 'walk' || airplane === on) return;
+    airplane = on;
+    if (on) {
+      if (!plane.model) { plane.model = createPaperPlane(); scene.add(plane.model); }
+      plane.x = player.x; plane.y = player.footY + EYE_HEIGHT - 0.2; plane.z = player.z; plane.speed = 0; plane.roll = 0; plane.prevYaw = player.yaw;
+      plane.model.visible = true;
+      showHint('Paper plane: fly with the stick or W A S D, look to steer · P to land');
+    } else {
+      plane.model.visible = false;
+      player.x = plane.x; player.z = plane.z;
+      const g = groundHeight(); player.footY = g !== null ? g : built.floorTop; player.vx = player.vz = player.vy = 0;
+      camera.fov = BASE_FOV; camera.updateProjectionMatrix();
+      showHint(WALK_HINT);
+    }
+    syncTunePanel();
+  }
+  function stepLantern(dt) {
+    // On while moving; the free mask slot keeps it unmasked whatever room the walker is in.
+    const moving = player.speed > 0.05;
+    const target = moving ? LANTERN_POWER : 0;
+    lantern.intensity += (target - lantern.intensity) * (1 - Math.exp(-6 * dt));
+    lantern.visible = mode === 'walk' && lantern.intensity > 0.02;
+    if (airplane) lantern.position.set(plane.x, plane.y + 0.12, plane.z);   // above the plane, so its top face reads
+    else lantern.position.set(camera.position.x, camera.position.y - 0.25, camera.position.z);
+  }
   function stepPlayer(dt) {
+    if (airplane) { stepPlane(dt); return; }
     // Keys give unit steps relative to the head. The touch stick gives an analog vector relative to the heading
     // it was engaged at (stick.refYaw), and the head turns toward the direction of travel while it is held.
     const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
@@ -623,7 +701,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   function updateLights(dt) {
     if (!built || !built.spots.length) return;
-    if (mappedLights) { if (built.baked) built.baked.setIntensity(tune.power / built.baked.bakedPower); return; }
+    if (mappedLights) { if (built.baked) built.baked.setIntensity(tune.power / built.baked.bakedPower); roomMask.haloSlot[0] = FREE_SLOT; return; }
     const { spots, leds } = built;
     const eye = camera.position;
     for (const led of leds) ledDistance.set(led, Math.hypot(led.world[0] - eye.x, led.world[1] - eye.y, led.world[2] - eye.z));
@@ -671,6 +749,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const order = [...spots.filter(s => s.castShadow), ...spots.filter(s => !s.castShadow)];
     order.forEach((s, idx) => { const led = s.userData.led; if (led) roomMask.setRoom(idx, led.boxes, led.yLo, led.yHi, s.castShadow); else roomMask.setRoom(idx, [], 0, 0); });
     spots.forEach((s, i) => { roomMask.haloSlot[i] = order.indexOf(s); });
+    roomMask.haloSlot[spots.length] = FREE_SLOT;   // the lantern follows every halo in the light list
     if (changed) { renderer.shadowMap.needsUpdate = true; sceneDirty = 3; }
   }
 
@@ -795,6 +874,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     lastTime = time;
     if (mode === 'walk') stepPlayer(dt);
     else { if (flying) flying(time); applyOrbit(); }
+    stepLantern(dt);
     updateEnvironment(dt);
     if (stepFixtures(dt)) { renderer.shadowMap.needsUpdate = true; for (const s of built?.spots || []) if (s.castShadow) s.shadow.needsUpdate = true; world.sun.shadow.needsUpdate = true; sceneDirty = 3; }
     updateLights(dt);
@@ -935,6 +1015,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     setTuning(false);
     if (document.pointerLockElement === tourCanvas) document.exitPointerLock();
     keys.clear(); releaseStick(); touchLook = null;
+    if (airplane) { airplane = false; plane.model.visible = false; player.x = plane.x; player.z = plane.z; player.footY = built.floorTop; camera.fov = BASE_FOV; camera.updateProjectionMatrix(); }
+    lantern.visible = false; lantern.intensity = 0;
     focusFixture = null; updateOutline(null); crosshair.dataset.target = 'false';
     body.dataset.tourMode = 'overview';
     const eyePose = { yaw: player.yaw, pitch: -player.pitch, distance: 0.12, target: new THREE.Vector3(player.x, player.footY + EYE_HEIGHT, player.z) };
@@ -956,6 +1038,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
     tunePanel.querySelector('input[name="clock"]').checked = !!tune.clock;
     tunePanel.querySelector('input[name="mapped"]').checked = mappedLights;
+    tunePanel.querySelector('input[name="airplane"]').checked = airplane;
   }
   function applyTune() {
     mats.setGlass(tune.glass);
@@ -965,6 +1048,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   tunePanel.addEventListener('input', e => {
     if (e.target.name === 'clock') { tune.clock = e.target.checked ? 1 : 0; applyTune(); return; }
     if (e.target.name === 'mapped') { setMappedLights(e.target.checked); return; }
+    if (e.target.name === 'airplane') { setAirplane(e.target.checked); return; }
     if (e.target.name in tune) { tune[e.target.name] = Number(e.target.value); if (e.target.name === 'hour') tune.clock = 0; applyTune(); syncTunePanel(); }
   });
   tunePanel.querySelector('[data-reset]').addEventListener('click', () => { Object.assign(tune, TUNE_DEFAULTS); applyTune(); syncTunePanel(); });
@@ -990,6 +1074,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.target === fileInput) return;
     if (e.code === 'KeyT') { setTuning(!tuningOpen); return; }
     if (e.code === 'KeyL') { setMappedLights(!mappedLights); syncTunePanel(); showHint(mappedLights ? 'House lights: baked light maps' : 'House lights: real time'); return; }
+    if (e.code === 'KeyP' && mode === 'walk') { setAirplane(!airplane); return; }
     if (mode !== 'walk') return;
     if (e.code === 'Escape') { if (tuningOpen) { setTuning(false); return; } exitWalk(); return; }
     if (tuningOpen) return;   // the settings panel holds the tour until it is closed
@@ -1109,6 +1194,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   useButton.addEventListener('pointerdown', e => { e.preventDefault(); if (!tuningOpen) activateFixture(focusFixture); });
   useButton.addEventListener('contextmenu', e => e.preventDefault());
   document.getElementById('tour-settings').addEventListener('click', () => { if (mode === 'walk') setTuning(!tuningOpen); });
+  document.getElementById('tour-plane').addEventListener('click', () => { if (mode === 'walk') setAirplane(!airplane); });
 
   // ---------------------------------------------------------------- loading
   function setStatus(text, error = false) { loadStatus.textContent = text; loadStatus.dataset.error = error ? 'true' : 'false'; }
@@ -1155,5 +1241,5 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const src = new URLSearchParams(location.search).get('src');
   if (src) loadUrl(src); else setStatus('');
 
-  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, setConfinedVolume: v => { confinedVolume = v; }, get mappedLights() { return mappedLights; }, get renderer() { return renderer; }, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
+  window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, setAirplane, get airplane() { return airplane; }, setConfinedVolume: v => { confinedVolume = v; }, get mappedLights() { return mappedLights; }, get renderer() { return renderer; }, benchmark, setQuality, RENDER, THREE, get mode() { return mode; }, get player() { return player; }, get orbit() { return orbit; }, get camera() { return camera; }, get scene() { return scene; }, get built() { return built; } });
 })();

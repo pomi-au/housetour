@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#1c1e1d">
   <meta name="description" content="Building model viewer: load a slab and footing model JSON, see it from above, click the floor to walk on it.">
   <title>Plan Model Viewer</title>
-  <link rel="stylesheet" href="tour/css/tour.css?v=mtqp5xdq">
-  <link rel="stylesheet" href="tour/css/plan.css?v=mtqp5xdq">
+  <link rel="stylesheet" href="tour/css/tour.css?v=mtqq435r">
+  <link rel="stylesheet" href="tour/css/plan.css?v=mtqq435r">
 </head>
 <body data-tour-mode="overview">
   <!-- The residence engine runs hidden and paused: the viewer lifts its standard hinged door from it. -->
@@ -27,6 +27,7 @@
     <div id="tour-target"></div>
     <div id="tour-loading" data-active="false">Building the model…</div>
     <div id="tour-topbar">
+      <button id="tour-plane" type="button" aria-label="Paper plane mode" title="Paper plane (P)">&#x2708;</button>
       <button id="tour-settings" type="button" aria-label="Settings" title="Settings (T)">&#9881;</button>
       <button id="tour-exit" type="button">Exit tour · Esc</button>
     </div>
@@ -45,6 +46,7 @@
       <label>Time of day <input type="range" name="hour" min="0" max="24" step="0.1"><output></output></label>
       <label class="tune-check"><input type="checkbox" name="clock" checked> Clock runs · 2.5 s = 1 hour</label>
       <label class="tune-check"><input type="checkbox" name="mapped"> House lights from baked maps (L)</label>
+      <label class="tune-check"><input type="checkbox" name="airplane"> Paper plane mode (P)</label>
       <div class="tune-buttons"><button type="button" data-reset>Reset</button><button type="button" data-close>Close · continue tour</button></div>
     </form>
     <div id="tour-hint" data-hidden="true"></div>
@@ -64,8 +66,8 @@
   </section>
 
   <script>window.__RESIDENCE_PAUSED__ = true;   /* the engine only supplies geometry here; it never draws */</script>
-  <script src="tour/js/residence-sound.js?v=mtqp5xdq"></script>
-  <script src="tour/js/residence-model.js?v=mtqp5xdq"></script>
-  <script src="tour/js/plan.bundle.js?v=mtqp5xdq"></script>
+  <script src="tour/js/residence-sound.js?v=mtqq435r"></script>
+  <script src="tour/js/residence-model.js?v=mtqq435r"></script>
+  <script src="tour/js/plan.bundle.js?v=mtqq435r"></script>
 </body>
 </html>

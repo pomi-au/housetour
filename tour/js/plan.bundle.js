@@ -37069,6 +37069,36 @@ float roomMask(int i, vec3 vRoomPos) {
     };
   }
 
+  // ../js/fixtures/paper-plane.js
+  function createPaperPlane({ span = 0.26, length = 0.3, materials = {} } = {}) {
+    const paper = materials.paper || new MeshStandardMaterial({ color: 16250609, emissive: 9342086, roughness: 0.85, metalness: 0, side: DoubleSide });
+    const shade = materials.shade || new MeshStandardMaterial({ color: 15000284, emissive: 7236710, roughness: 0.85, metalness: 0, side: DoubleSide });
+    const group = new Group();
+    const nose = new Vector3(0, 0, -length / 2), tail = length / 2, dihedral = 0.16;
+    const tri = (a, b, c, material) => {
+      const geo = new BufferGeometry();
+      geo.setAttribute("position", new Float32BufferAttribute([a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z], 3));
+      geo.computeVertexNormals();
+      const m = new Mesh(geo, material);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      group.add(m);
+      return m;
+    };
+    for (const s of [-1, 1]) {
+      const tip = new Vector3(s * span / 2, dihedral * span / 2, tail);
+      const root = new Vector3(0, 0, tail);
+      tri(nose, tip, root, s > 0 ? paper : shade);
+      const inner = new Vector3(s * span * 0.12, -0.02, tail);
+      tri(nose, root, inner, shade);
+    }
+    tri(nose, new Vector3(0, 0, tail), new Vector3(0, -0.045, tail * 0.9), shade);
+    group.userData.bank = (angle) => {
+      group.rotation.z = angle;
+    };
+    return group;
+  }
+
   // ../js/plan.js
   BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
   BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -37156,7 +37186,9 @@ float roomMask(int i, vec3 vRoomPos) {
       renderer.shadowMap.needsUpdate = true;
     }
     window.addEventListener("resize", applyQuality);
-    const roomMask = createRoomMask(SPOT_POOL);
+    const roomMask = createRoomMask(SPOT_POOL + 1);
+    const FREE_SLOT = SPOT_POOL;
+    roomMask.setRoom(FREE_SLOT, [], 0, 0, true);
     roomMask.scale.floor.value = tune.floor;
     roomMask.scale.wall.value = tune.wall;
     const mats = createMaterials({ renderer, glassStrength: tune.glass, patch: roomMask.patch });
@@ -37574,6 +37606,14 @@ float roomMask(int i, vec3 vRoomPos) {
     }
     const player = { x: 0, z: 0, footY: 0, eyeY: 0, yaw: 0, pitch: 0, vx: 0, vz: 0, vy: 0, grounded: true, bob: 0, speed: 0 };
     const stick = { x: 0, y: 0, active: false, refYaw: 0 };
+    const lantern = new PointLight(16769720, 0, 7, 2);
+    lantern.castShadow = false;
+    lantern.visible = false;
+    scene.add(lantern);
+    const LANTERN_POWER = 7;
+    let airplane = false;
+    const plane = { x: 0, y: 0, z: 0, speed: 0, roll: 0, prevYaw: 0, model: null };
+    const PLANE = { cruise: 1.5, max: 3.6, radius: 0.15, camBack: 0.75, camUp: 0.22, fov: 95 };
     let touchLook = null;
     const keys = /* @__PURE__ */ new Set();
     const raycaster = new Raycaster();
@@ -37622,7 +37662,100 @@ float roomMask(int i, vec3 vRoomPos) {
       const hit = probe(player.x, player.footY + 1.1, player.z, 0, -1, 0, 6);
       return hit ? hit.point.y : null;
     }
+    function stepPlane(dt) {
+      const forward = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) + (stick.active ? stick.y : 0);
+      const steer = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0) + (stick.active ? stick.x : 0);
+      if (touchLook) {
+        const dead = 10, rate = 0.014;
+        const dx = touchLook.x - touchLook.startX, dy = touchLook.y - touchLook.startY;
+        player.yaw -= Math.sign(dx) * Math.max(0, Math.abs(dx) - dead) * rate * dt;
+        player.pitch = Math.max(-1.2, Math.min(1.2, player.pitch - Math.sign(dy) * Math.max(0, Math.abs(dy) - dead) * rate * 0.7 * dt));
+      }
+      player.yaw -= steer * 1.9 * dt;
+      const target = Math.max(0, Math.min(PLANE.max, PLANE.cruise + forward * 2.1));
+      plane.speed += (target - plane.speed) * (1 - Math.exp(-3 * dt));
+      const cp = Math.cos(player.pitch);
+      const dir = new Vector3(-Math.sin(player.yaw) * cp, Math.sin(player.pitch), -Math.cos(player.yaw) * cp);
+      const step = plane.speed * dt;
+      if (step > 1e-5) {
+        const hit = probe(plane.x, plane.y, plane.z, dir.x, dir.y, dir.z, step + PLANE.radius);
+        if (hit) plane.speed = 0;
+        else {
+          plane.x += dir.x * step;
+          plane.y += dir.y * step;
+          plane.z += dir.z * step;
+        }
+      }
+      const down = probe(plane.x, plane.y, plane.z, 0, -1, 0, PLANE.radius + 0.02);
+      if (down) plane.y = down.point.y + PLANE.radius + 0.02;
+      const up = probe(plane.x, plane.y, plane.z, 0, 1, 0, PLANE.radius + 0.02);
+      if (up) plane.y = Math.max(plane.y - 0.05, up.point.y - PLANE.radius - 0.02);
+      plane.x = Math.max(LOT.x0 + 0.4, Math.min(LOT.x1 - 0.4, plane.x));
+      plane.z = Math.max(LOT.z0 + 0.4, Math.min(LOT.z1 - 0.4, plane.z));
+      let dyaw = player.yaw - plane.prevYaw;
+      dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+      plane.prevYaw = player.yaw;
+      plane.roll += (-dyaw / Math.max(dt, 1e-3) * 0.35 - plane.roll) * (1 - Math.exp(-6 * dt));
+      plane.roll = Math.max(-0.9, Math.min(0.9, plane.roll));
+      const m = plane.model;
+      m.position.set(plane.x, plane.y, plane.z);
+      m.rotation.set(player.pitch, player.yaw, 0, "YXZ");
+      m.userData.bank(plane.roll);
+      camera.position.set(plane.x - dir.x * PLANE.camBack, plane.y + PLANE.camUp - dir.y * PLANE.camBack * 0.4, plane.z - dir.z * PLANE.camBack);
+      camera.lookAt(plane.x + dir.x * 0.6, plane.y + dir.y * 0.6, plane.z + dir.z * 0.6);
+      player.x = plane.x;
+      player.z = plane.z;
+      player.footY = plane.y - 0.2;
+      player.eyeY = camera.position.y;
+      player.speed = plane.speed;
+      const fov2 = PLANE.fov / zoomLevel;
+      if (Math.abs(camera.fov - fov2) > 0.01) {
+        camera.fov = fov2;
+        camera.updateProjectionMatrix();
+      }
+    }
+    function setAirplane(on) {
+      if (mode !== "walk" || airplane === on) return;
+      airplane = on;
+      if (on) {
+        if (!plane.model) {
+          plane.model = createPaperPlane();
+          scene.add(plane.model);
+        }
+        plane.x = player.x;
+        plane.y = player.footY + EYE_HEIGHT - 0.2;
+        plane.z = player.z;
+        plane.speed = 0;
+        plane.roll = 0;
+        plane.prevYaw = player.yaw;
+        plane.model.visible = true;
+        showHint("Paper plane: fly with the stick or W A S D, look to steer \xB7 P to land");
+      } else {
+        plane.model.visible = false;
+        player.x = plane.x;
+        player.z = plane.z;
+        const g = groundHeight();
+        player.footY = g !== null ? g : built.floorTop;
+        player.vx = player.vz = player.vy = 0;
+        camera.fov = BASE_FOV;
+        camera.updateProjectionMatrix();
+        showHint(WALK_HINT);
+      }
+      syncTunePanel();
+    }
+    function stepLantern(dt) {
+      const moving = player.speed > 0.05;
+      const target = moving ? LANTERN_POWER : 0;
+      lantern.intensity += (target - lantern.intensity) * (1 - Math.exp(-6 * dt));
+      lantern.visible = mode === "walk" && lantern.intensity > 0.02;
+      if (airplane) lantern.position.set(plane.x, plane.y + 0.12, plane.z);
+      else lantern.position.set(camera.position.x, camera.position.y - 0.25, camera.position.z);
+    }
     function stepPlayer(dt) {
+      if (airplane) {
+        stepPlane(dt);
+        return;
+      }
       const forward = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0);
       const strafe = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
       const run = keys.has("ShiftLeft") || keys.has("ShiftRight");
@@ -37807,6 +37940,7 @@ float roomMask(int i, vec3 vRoomPos) {
       if (!built || !built.spots.length) return;
       if (mappedLights) {
         if (built.baked) built.baked.setIntensity(tune.power / built.baked.bakedPower);
+        roomMask.haloSlot[0] = FREE_SLOT;
         return;
       }
       const { spots, leds } = built;
@@ -37875,6 +38009,7 @@ float roomMask(int i, vec3 vRoomPos) {
       spots.forEach((s, i) => {
         roomMask.haloSlot[i] = order.indexOf(s);
       });
+      roomMask.haloSlot[spots.length] = FREE_SLOT;
       if (changed) {
         renderer.shadowMap.needsUpdate = true;
         sceneDirty = 3;
@@ -38004,6 +38139,7 @@ float roomMask(int i, vec3 vRoomPos) {
         if (flying) flying(time);
         applyOrbit();
       }
+      stepLantern(dt);
       updateEnvironment(dt);
       if (stepFixtures(dt)) {
         renderer.shadowMap.needsUpdate = true;
@@ -38191,6 +38327,17 @@ float roomMask(int i, vec3 vRoomPos) {
       keys.clear();
       releaseStick();
       touchLook = null;
+      if (airplane) {
+        airplane = false;
+        plane.model.visible = false;
+        player.x = plane.x;
+        player.z = plane.z;
+        player.footY = built.floorTop;
+        camera.fov = BASE_FOV;
+        camera.updateProjectionMatrix();
+      }
+      lantern.visible = false;
+      lantern.intensity = 0;
       focusFixture = null;
       updateOutline(null);
       crosshair.dataset.target = "false";
@@ -38217,6 +38364,7 @@ float roomMask(int i, vec3 vRoomPos) {
       }
       tunePanel.querySelector('input[name="clock"]').checked = !!tune.clock;
       tunePanel.querySelector('input[name="mapped"]').checked = mappedLights;
+      tunePanel.querySelector('input[name="airplane"]').checked = airplane;
     }
     function applyTune() {
       mats.setGlass(tune.glass);
@@ -38235,6 +38383,10 @@ float roomMask(int i, vec3 vRoomPos) {
       }
       if (e.target.name === "mapped") {
         setMappedLights(e.target.checked);
+        return;
+      }
+      if (e.target.name === "airplane") {
+        setAirplane(e.target.checked);
         return;
       }
       if (e.target.name in tune) {
@@ -38286,6 +38438,10 @@ float roomMask(int i, vec3 vRoomPos) {
         setMappedLights(!mappedLights);
         syncTunePanel();
         showHint(mappedLights ? "House lights: baked light maps" : "House lights: real time");
+        return;
+      }
+      if (e.code === "KeyP" && mode === "walk") {
+        setAirplane(!airplane);
         return;
       }
       if (mode !== "walk") return;
@@ -38474,6 +38630,9 @@ float roomMask(int i, vec3 vRoomPos) {
     document.getElementById("tour-settings").addEventListener("click", () => {
       if (mode === "walk") setTuning(!tuningOpen);
     });
+    document.getElementById("tour-plane").addEventListener("click", () => {
+      if (mode === "walk") setAirplane(!airplane);
+    });
     function setStatus(text, error = false) {
       loadStatus.textContent = text;
       loadStatus.dataset.error = error ? "true" : "false";
@@ -38546,7 +38705,9 @@ float roomMask(int i, vec3 vRoomPos) {
     const src = new URLSearchParams(location.search).get("src");
     if (src) loadUrl(src);
     else setStatus("");
-    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, setConfinedVolume: (v) => {
+    window.PlanTour = Object.freeze({ load: loadJson, loadUrl, enterWalk, exitWalk, probe, blocked, groundHeight, activate: activateFixture, centreTarget, setMappedLights, setAirplane, get airplane() {
+      return airplane;
+    }, setConfinedVolume: (v) => {
       confinedVolume = v;
     }, get mappedLights() {
       return mappedLights;
