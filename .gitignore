@@ -1,4 +1,6 @@
 tour/build/node_modules/
 .netlify/
 .DS_Store
-models/
+models/*
+!models/10024_house.json
+!models/carabeen16_house.json
